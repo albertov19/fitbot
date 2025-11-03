@@ -1,15 +1,16 @@
-name: Book 7AM Classes (Mon-Fri)
+name: Book 7AM Classes (Sat–Wed)
 
 on:
   workflow_dispatch:
     inputs:
       force_run:
-        description: 'Run immediately (ignore 19:05 Europe/Madrid gate)'
+        description: "Run immediately (ignore 19:05 Europe/Madrid gate)"
         type: boolean
         default: true
   schedule:
-    - cron: '5 17 * * *'  # 19:05 local in summer (UTC+2)
-    - cron: '5 18 * * *'  # 19:05 local in winter (UTC+1)
+    # GitHub Actions cron is UTC. Two entries handle DST; restricted to Sat–Wed.
+    - cron: "5 17 * * 6,0-3"  # 19:05 local in summer (UTC+2): Sat, Sun, Mon, Tue, Wed
+    - cron: "5 18 * * 6,0-3"  # 19:05 local in winter (UTC+1): Sat, Sun, Mon, Tue, Wed
 
 jobs:
   book:
@@ -17,7 +18,7 @@ jobs:
     timeout-minutes: 15
     env:
       EMAIL: ${{ secrets.EMAIL }}
-      PASSWORD: ${{ secrets.PWD }}          # map PWD -> PASSWORD
+      PASSWORD: ${{ secrets.PWD }}
       BOX_NAME: ${{ secrets.BOX_NAME }}
       BOX_ID: ${{ secrets.BOX_ID }}
       FAMILY_ID: ${{ secrets.FAMILY_ID }}
@@ -30,24 +31,31 @@ jobs:
       - name: Decide whether to run
         id: gate
         run: |
-          echo "RUN_JOB=true" >> $GITHUB_ENV
+          echo "RUN_JOB=true" >> "$GITHUB_ENV"
+
+          TARGET_HM="19:05"
+          NOW_HM=$(TZ=Europe/Madrid date +'%H:%M')
+          echo "Event=${{ github.event_name }} | Local Europe/Madrid time now: $NOW_HM | target: $TARGET_HM"
+
+          within_window() {
+            # allow 10-minute window starting at 19:05 -> [19:05, 19:15)
+            now_s=$(TZ=Europe/Madrid date -d "today $NOW_HM" +%s)
+            tgt_s=$(TZ=Europe/Madrid date -d "today $TARGET_HM" +%s)
+            diff=$(( now_s - tgt_s ))
+            [ $diff -ge 0 ] && [ $diff -lt 600 ]  # 0..599 seconds
+          }
+
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            TARGET="19:05"
-            NOW=$(TZ=Europe/Madrid date +'%H:%M')
-            echo "Scheduled run. Europe/Madrid time is $NOW; target is $TARGET"
-            if [ "$NOW" != "$TARGET" ]; then
-              echo "RUN_JOB=false" >> $GITHUB_ENV
+            if ! within_window; then
+              echo "RUN_JOB=false" >> "$GITHUB_ENV"
+              echo "Outside allowed window -> skipping."
             fi
           else
-            if [ "${{ inputs.force_run }}" = "false" ]; then
-              TARGET="19:05"
-              NOW=$(TZ=Europe/Madrid date +'%H:%M')
-              echo "Manual run with force_run=false. Local time $NOW, target $TARGET"
-              if [ "$NOW" != "$TARGET" ]; then
-                echo "RUN_JOB=false" >> $GITHUB_ENV
-              fi
+            if [ "${{ inputs.force_run }}" = "false" ] && ! within_window; then
+              echo "RUN_JOB=false" >> "$GITHUB_ENV"
+              echo "Manual run with force_run=false but outside window -> skipping."
             else
-              echo "Manual run with force_run=true → proceeding regardless of time."
+              echo "Manual run allowed -> proceeding."
             fi
           fi
 
@@ -59,11 +67,38 @@ jobs:
         if: ${{ env.RUN_JOB == 'true' }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install system deps (jq)
+        if: ${{ env.RUN_JOB == 'true' }}
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install Python deps
         if: ${{ env.RUN_JOB == 'true' }}
         run: pip install .
+
+      - name: Build booking goals (HYRO Tue on odd weeks, Wed on even)
+        if: ${{ env.RUN_JOB == 'true' }}
+        run: |
+          TARGET_DATE=$(TZ=Europe/Madrid date -d "+${DAYS_IN_ADVANCE} day" +%F)
+          ISO_WEEK=$(TZ=Europe/Madrid date -d "$TARGET_DATE" +%V)   # 01..53
+          PARITY=$((10#$ISO_WEEK % 2))  # 1 = odd, 0 = even
+
+          if [ $PARITY -eq 1 ]; then
+            HYRO_INDEX="1"   # Tue
+            HYRO_DAY="Tuesday"
+          else
+            HYRO_INDEX="2"   # Wed
+            HYRO_DAY="Wednesday"
+          fi
+          echo "Target date: $TARGET_DATE (ISO week $ISO_WEEK) → HYRO on $HYRO_DAY"
+
+          UPDATED=$(echo "${BOOKING_GOALS}" | jq --arg i "$HYRO_INDEX" '.[$i].name = "HYRO WOD"')
+          {
+            echo "BOOKING_GOALS<<EOF"
+            echo "$UPDATED"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
       - name: Start NordLynx + SOCKS5 proxy (Spain)
         if: ${{ env.RUN_JOB == 'true' && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
@@ -91,10 +126,9 @@ jobs:
             echo "❌ Proxy not ready. Diagnostics:"
             docker ps || true
             docker logs nordlynx-proxy || true
-            docker exec nordlynx-proxy bash -lc 'nordvpn status || true' || true
             exit 1
           fi
-          echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
+          echo "PROXY=socks5://127.0.0.1:1080" >> "$GITHUB_ENV"
 
           echo "Verifying geo-location through proxy..."
           INFO=$(curl -s -x socks5://127.0.0.1:1080 https://ipinfo.io/json || true)
@@ -106,13 +140,15 @@ jobs:
           fi
           echo "✅ VPN geo check passed for $EXPECTED"
 
-      - name: Run booking script (Mon–Fri only)
+      - name: Run booking script (Sat–Wed only)
         if: ${{ env.RUN_JOB == 'true' && env.EMAIL != '' && env.PASSWORD != '' && env.BOX_NAME != '' && env.BOX_ID != '' }}
         run: |
-          DOW=$(TZ=Europe/Madrid date +%u)  # 1..7 (Mon..Sun)
-          if [ "$DOW" -gt 5 ]; then
-            echo "It's weekend; skipping."; exit 0
+          # %u: 1..7 (Mon..Sun). We want Sat(6), Sun(7), Mon(1), Tue(2), Wed(3).
+          DOW=$(TZ=Europe/Madrid date +%u)
+          if [ "$DOW" = "4" ] || [ "$DOW" = "5" ]; then
+            echo "It's Thu/Fri; skipping."; exit 0
           fi
+
           echo "Attempting booking for +${DAYS_IN_ADVANCE} days."
           python src/main.py \
             --email "$EMAIL" \
