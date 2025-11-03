@@ -75,23 +75,32 @@ jobs:
           echo "Starting NordLynx proxy for country: ${NORDVPN_COUNTRY}"
           docker run -d --name nordlynx-proxy \
             --cap-add=NET_ADMIN --device /dev/net/tun \
-            -e TOKEN="${NORDVPN_TOKEN}" \
+            -e NORDVPN_LOGIN="${NORDVPN_TOKEN}" \
+            -e NORDVPN_PASS="" \
             -e COUNTRY="${NORDVPN_COUNTRY}" \
-            -p 1080:1080 -p 3128:3128 \
+            -e TECHNOLOGY=NordLynx \
+            -p 1080:1080 -p 8888:8888 \
             edgd1er/nordlynx-proxy:latest-ubuntu
-
-          echo "Waiting for proxy to be ready..."
+      
+          echo "Waiting for SOCKS proxy to be ready on 127.0.0.1:1080 ..."
           for i in {1..40}; do
             OUT=$(curl -s --max-time 5 -x socks5://127.0.0.1:1080 https://ipinfo.io/ip || true)
             if [[ "$OUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "✅ Proxy is up: $OUT"; break
+              echo "✅ SOCKS proxy up: $OUT"
+              READY=1; break
             fi
             echo "Attempt $i/40..."; sleep 2
           done
-
+          if [ -z "$READY" ]; then
+            echo "❌ Proxy not ready. Diagnostics:"
+            docker ps || true
+            docker logs nordlynx-proxy || true
+            docker exec nordlynx-proxy bash -lc 'nordvpn status || true' || true
+            exit 1
+          fi
           echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
-
-          echo "Verifying location through proxy..."
+      
+          echo "Verifying geo-location through proxy..."
           INFO=$(curl -s -x socks5://127.0.0.1:1080 https://ipinfo.io/json || true)
           echo "$INFO" | jq -r '.ip, .country, .city, .org'
           EXPECTED=$(echo "$NORDVPN_COUNTRY" | tr '[:lower:]' '[:upper:]')
@@ -100,31 +109,6 @@ jobs:
             echo "⚠️ Expected $EXPECTED but got $GOT"; exit 1
           fi
           echo "✅ VPN geo check passed for $EXPECTED"
-
-      - name: Run booking script (Mon-Fri only)
-        if: env.RUN_JOB == 'true' && env.EMAIL != '' && env.PASSWORD != '' && env.BOX_NAME != '' && env.BOX_ID != '' && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != ''
-        run: |
-          DOW=$(TZ=Europe/Madrid date +%u)  # 1..7 (Mon..Sun)
-          if [ "$DOW" -gt 5 ]; then
-            echo "It's weekend; skipping."; exit 0
-          fi
-
-          echo "Attempting booking for +${DAYS_IN_ADVANCE} days."
-          python src/main.py \
-            --email "$EMAIL" \
-            --password "$PASSWORD" \
-            --box-name "$BOX_NAME" \
-            --box-id "$BOX_ID" \
-            --booking-goals "$BOOKING_GOALS" \
-            --days-in-advance "$DAYS_IN_ADVANCE" \
-            ${FAMILY_ID:+--family-id "$FAMILY_ID"} \
-            ${PROXY:+--proxy "$PROXY"}
-
-      - name: Cleanup VPN
-        if: always()
-        run: |
-          docker rm -f nordlynx-proxy || true
-          echo "VPN container removed"
 
       - name: Post-run note if skipped/misconfigured
         if: env.RUN_JOB != 'true' || env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_TOKEN == '' || env.NORDVPN_COUNTRY == ''

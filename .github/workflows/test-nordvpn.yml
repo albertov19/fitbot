@@ -20,38 +20,38 @@ jobs:
 
       - name: Start NordLynx + SOCKS5 proxy (Spain)
         if: ${{ env.NORD_TOKEN != '' && env.NORD_COUNTRY != '' }}
+        env:
+          NORD_TOKEN: ${{ env.NORD_TOKEN }}
+          NORD_COUNTRY: ${{ env.NORD_COUNTRY }}
         run: |
           echo "Starting nordlynx-proxy for ${NORD_COUNTRY}"
           docker run -d --name nordlynx-proxy \
             --cap-add=NET_ADMIN --device /dev/net/tun \
-            -e NORDVPN_LOGIN="${NORD_TOKEN}" \    # <-- use token here
-            -e NORDVPN_PASS="" \                  # <-- empty when using token
+            -e NORDVPN_LOGIN="${NORD_TOKEN}" \
+            -e NORDVPN_PASS="" \
             -e COUNTRY="${NORD_COUNTRY}" \
             -e TECHNOLOGY=NordLynx \
             -p 1080:1080 -p 8888:8888 \
             edgd1er/nordlynx-proxy:latest-ubuntu
-
-          echo "Waiting for proxy to be ready..."
+      
+          echo "Waiting for SOCKS proxy..."
           for i in {1..40}; do
             OUT=$(curl -s --max-time 5 -x socks5://127.0.0.1:1080 https://ipinfo.io/ip || true)
             if [[ "$OUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "✅ SOCKS proxy up: $OUT"
-              break
+              READY=1; break
             fi
-            sleep 2
+            echo "Attempt $i/40..."; sleep 2
           done
-
-          # If still not ready, dump useful diagnostics and fail early
-          if ! timeout 3 bash -c "echo > /dev/tcp/127.0.0.1/1080" 2>/dev/null; then
-            echo "❌ SOCKS port not open; printing diagnostics"
-            echo "=== docker ps ==="; docker ps || true
-            echo "=== container logs ==="; docker logs nordlynx-proxy || true
-            echo "=== nordvpn status ==="; docker exec nordlynx-proxy bash -lc 'nordvpn status || true'
+          if [ -z "$READY" ]; then
+            echo "❌ Proxy not ready. Diagnostics:"
+            docker ps || true
+            docker logs nordlynx-proxy || true
+            docker exec nordlynx-proxy bash -lc 'nordvpn status || true' || true
             exit 1
           fi
-
-          # Export proxy for later steps
           echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
+
 
       - name: Check IP through VPN (via SOCKS5)
         if: ${{ env.NORD_TOKEN != '' && env.NORD_COUNTRY != '' }}
