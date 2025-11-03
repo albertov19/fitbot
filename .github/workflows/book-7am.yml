@@ -1,77 +1,107 @@
 name: Book 7AM Classes (Mon-Fri)
 
-# This workflow books the 7:00 AM CrossFit class for Monday through Friday.
-# It runs at 19:05 local (approx) two days before the target class (36h+ window already opened).
-# Because GitHub cron uses UTC, we approximate 19:05 Europe/Madrid (Spain) as 17:05 UTC.
-# IMPORTANT: Adjust the cron times below if your box is in a different timezone.
+# Runs at 19:05 Europe/Madrid two days before the target 07:00 class.
+# GitHub cron is UTC; Madrid is UTC+1 in winter and UTC+2 in summer.
+# We schedule BOTH 17:05 and 18:05 UTC and gate by local time in the first step.
 
 on:
   workflow_dispatch:
   schedule:
-    # Saturday 17:05 UTC -> Books Monday 07:00 (days_in_advance=2)
-    - cron: '5 17 * * 6'
-    # Sunday 17:05 UTC -> Books Tuesday 07:00
-    - cron: '5 17 * * 0'
-    # Monday 17:05 UTC -> Books Wednesday 07:00
-    - cron: '5 17 * * 1'
-    # Tuesday 17:05 UTC -> Books Thursday 07:00
-    - cron: '5 17 * * 2'
-    # Wednesday 17:05 UTC -> Books Friday 07:00
-    - cron: '5 17 * * 3'
+    # 17:05 UTC (summer) and 18:05 UTC (winter) every day
+    - cron: '5 17 * * *'
+    - cron: '5 18 * * *'
 
 jobs:
   book:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       EMAIL: ${{ secrets.EMAIL }}
       PASSWORD: ${{ secrets.PASSWORD }}
       BOX_NAME: ${{ secrets.BOX_NAME }}
       BOX_ID: ${{ secrets.BOX_ID }}
-      # Optional secrets (add them only if needed)
       FAMILY_ID: ${{ secrets.FAMILY_ID }}
-      # NordVPN (required for proxy; set these secrets)
+      # VPN (make sure NORD_COUNTRY=ES for Spain)
       NORDVPN_TOKEN: ${{ secrets.NORD_TOKEN }}
-      NORDVPN_COUNTRY: ${{ secrets.NORD_COUNTRY }}
-      # Booking goals: Monday(0) through Friday(4) at 07:00.
-      # Replace "CrossFit" with a distinctive part of the class name at your box (e.g. WOD, OPENBOX, etc.)
+      NORDVPN_COUNTRY: ${{ secrets.NORD_COUNTRY }} # e.g., ES
+      # Booking goals Mon(0)..Fri(4) at 07:00 named "CrossFit"
       BOOKING_GOALS: '{"0":{"time":"0700","name":"CrossFit"},"1":{"time":"0700","name":"CrossFit"},"2":{"time":"0700","name":"CrossFit"},"3":{"time":"0700","name":"CrossFit"},"4":{"time":"0700","name":"CrossFit"}}'
       DAYS_IN_ADVANCE: 2
+
     steps:
+      - name: Gate by local time (must be 19:05 Europe/Madrid)
+        id: gate
+        run: |
+          TARGET="19:05"
+          NOW=$(TZ=Europe/Madrid date +'%H:%M')
+          echo "Local Europe/Madrid time is $NOW; target is $TARGET"
+          if [ "$NOW" = "$TARGET" ]; then
+            echo "RUN_JOB=true" >> $GITHUB_ENV
+          else
+            echo "RUN_JOB=false" >> $GITHUB_ENV
+          fi
+
       - name: Checkout repository
+        if: env.RUN_JOB == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: env.RUN_JOB == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: env.RUN_JOB == 'true'
         run: |
           pip install .
 
-      - name: Connect NordVPN (Spain proxy enforced)
-        if: ${{ env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
+      - name: Start NordLynx + SOCKS5 proxy (Spain)
+        if: env.RUN_JOB == 'true' && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != ''
         run: |
-          echo "Starting NordVPN dockerized ephemeral container to obtain SOCKS5 proxy";
-          docker run -d --name nordvpn --cap-add=NET_ADMIN -p 1080:1080 -e TOKEN=${NORDVPN_TOKEN} -e CONNECT=${NORDVPN_COUNTRY} -e TECHNOLOGY=NordLynx -e NETWORK=172.17.0.0/16 -e SOCKS5=on ghcr.io/bubuntux/nordvpn:latest
-          # wait for container to establish connection
-          for i in {1..30}; do
-            STATUS=$(docker logs nordvpn 2>&1 | grep -i 'connected' || true)
-            if [ -n "$STATUS" ]; then echo "NordVPN connected"; break; fi; sleep 2; done
-          docker exec nordvpn cat /var/lib/nordvpn/data/settings.json || true
-          # Wait for SOCKS5 proxy to be ready
-          echo "Waiting for SOCKS5 proxy..."
-          sleep 5
-          # Expose SOCKS5 proxy (default container sets at 127.0.0.1:1080)
-          echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
-          echo "Using NordVPN proxy socks5://127.0.0.1:1080"
+          echo "Starting NordLynx proxy for country: ${NORDVPN_COUNTRY}"
+          docker run -d --name nordlynx-proxy \
+            --cap-add=NET_ADMIN --device /dev/net/tun \
+            -e TOKEN="${NORDVPN_TOKEN}" \
+            -e COUNTRY="${NORDVPN_COUNTRY}" \
+            -p 1080:1080 -p 3128:3128 \
+            edgd1er/nordlynx-proxy:latest-ubuntu
 
-      - name: Run booking script
-        # Only run if mandatory secrets are present
-        if: ${{ env.EMAIL != '' && env.PASSWORD != '' && env.BOX_NAME != '' && env.BOX_ID != '' && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
+          echo "Waiting for proxy to be ready..."
+          for i in {1..30}; do
+            # Try via SOCKS5; success when we get an IP back
+            OUT=$(curl -s --max-time 5 -x socks5://127.0.0.1:1080 https://ipinfo.io/ip || true)
+            if [[ "$OUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "✅ Proxy is up: $OUT"
+              break
+            fi
+            sleep 2
+          done
+
+          # Export proxy for the booking script
+          echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
+
+          echo "Verifying location through proxy..."
+          INFO=$(curl -s -x socks5://127.0.0.1:1080 https://ipinfo.io/json || true)
+          echo "$INFO" | jq -r '.ip, .country, .city, .org'
+          EXPECTED=$(echo "$NORDVPN_COUNTRY" | tr '[:lower:]' '[:upper:]')
+          GOT=$(echo "$INFO" | jq -r '.country // ""')
+          if [ "$GOT" != "$EXPECTED" ]; then
+            echo "⚠️ Expected $EXPECTED but got $GOT"; exit 1
+          fi
+          echo "✅ VPN geo check passed for $EXPECTED"
+
+      - name: Run booking script (Mon-Fri only)
+        if: env.RUN_JOB == 'true' && env.EMAIL != '' && env.PASSWORD != '' && env.BOX_NAME != '' && env.BOX_ID != '' && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != ''
         run: |
-          echo "Attempting booking for day +${DAYS_IN_ADVANCE} (target weekday).";
+          # Only attempt on Mon-Fri targets:
+          DOW=$(TZ=Europe/Madrid date +%u)         # 1..7 (Mon..Sun)
+          if [ "$DOW" -gt 5 ]; then
+            echo "It's weekend; skipping."
+            exit 0
+          fi
+
+          echo "Attempting booking for +${DAYS_IN_ADVANCE} days."
           python src/main.py \
             --email "$EMAIL" \
             --password "$PASSWORD" \
@@ -82,14 +112,13 @@ jobs:
             ${FAMILY_ID:+--family-id "$FAMILY_ID"} \
             ${PROXY:+--proxy "$PROXY"}
 
-      - name: Disconnect NordVPN
-        if: ${{ always() && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
+      - name: Cleanup VPN
+        if: always()
         run: |
-          docker rm -f nordvpn || true
-          echo "NordVPN container removed"
+          docker rm -f nordlynx-proxy || true
+          echo "VPN container removed"
 
-      - name: Post-run note if skipped
-        if: ${{ env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_TOKEN == '' || env.NORDVPN_COUNTRY == '' }}
+      - name: Post-run note if skipped/misconfigured
+        if: env.RUN_JOB != 'true' || env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_TOKEN == '' || env.NORDVPN_COUNTRY == ''
         run: |
-          echo "Booking step skipped - required secrets missing"
-
+          echo "Skipped or missing secrets. RUN_JOB=${RUN_JOB:-false}"
