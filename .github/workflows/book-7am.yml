@@ -1,0 +1,91 @@
+name: Book 7AM Classes (Mon-Fri)
+
+# This workflow books the 7:00 AM CrossFit class for Monday through Friday.
+# It runs at 19:05 local (approx) two days before the target class (36h+ window already opened).
+# Because GitHub cron uses UTC, we approximate 19:05 Europe/Madrid (Spain) as 17:05 UTC.
+# IMPORTANT: Adjust the cron times below if your box is in a different timezone.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Saturday 17:05 UTC -> Books Monday 07:00 (days_in_advance=2)
+    - cron: '5 17 * * 6'
+    # Sunday 17:05 UTC -> Books Tuesday 07:00
+    - cron: '5 17 * * 0'
+    # Monday 17:05 UTC -> Books Wednesday 07:00
+    - cron: '5 17 * * 1'
+    # Tuesday 17:05 UTC -> Books Thursday 07:00
+    - cron: '5 17 * * 2'
+    # Wednesday 17:05 UTC -> Books Friday 07:00
+    - cron: '5 17 * * 3'
+
+jobs:
+  book:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EMAIL: ${{ secrets.EMAIL }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+      BOX_NAME: ${{ secrets.BOX_NAME }}
+      BOX_ID: ${{ secrets.BOX_ID }}
+      # Optional secrets (add them only if needed)
+      FAMILY_ID: ${{ secrets.FAMILY_ID }}
+      # NordVPN (required for proxy; set these secrets)
+      NORDVPN_USERNAME: ${{ secrets.EMAIL }}
+      NORDVPN_PASSWORD: ${{ secrets.NORD_PWD }}
+      NORDVPN_COUNTRY: ${{ secrets.NORD_COUNTRY }}
+      # Booking goals: Monday(0) through Friday(4) at 07:00.
+      # Replace "CrossFit" with a distinctive part of the class name at your box (e.g. WOD, OPENBOX, etc.)
+      BOOKING_GOALS: '{"0":{"time":"0700","name":"CrossFit"},"1":{"time":"0700","name":"CrossFit"},"2":{"time":"0700","name":"CrossFit"},"3":{"time":"0700","name":"CrossFit"},"4":{"time":"0700","name":"CrossFit"}}'
+      DAYS_IN_ADVANCE: 2
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install .
+
+      - name: Connect NordVPN (Spain proxy enforced)
+        if: env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != ''
+        run: |
+          echo "Starting NordVPN dockerized ephemeral container to obtain SOCKS5 proxy";
+          docker run -d --name nordvpn --cap-add=NET_ADMIN -e USER=${NORDVPN_USERNAME} -e PASS=${NORDVPN_PASSWORD} -e CONNECT=${NORDVPN_COUNTRY} ghcr.io/bubuntux/nordvpn:latest
+          # wait for container to establish connection
+          for i in {1..30}; do
+            STATUS=$(docker logs nordvpn 2>&1 | grep -i 'connected' || true)
+            if [ -n "$STATUS" ]; then echo "NordVPN connected"; break; fi; sleep 2; done
+          docker exec nordvpn cat /var/lib/nordvpn/data/settings.json || true
+          # Expose SOCKS5 proxy (default container sets at 127.0.0.1:1080)
+          echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
+          echo "Using NordVPN proxy socks5://127.0.0.1:1080"
+
+      - name: Run booking script
+        # Only run if mandatory secrets are present
+        if: env.EMAIL != '' && env.PASSWORD != '' && env.BOX_NAME != '' && env.BOX_ID != '' && env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != ''
+        run: |
+          echo "Attempting booking for day +${DAYS_IN_ADVANCE} (target weekday).";
+          python src/main.py \
+            --email "$EMAIL" \
+            --password "$PASSWORD" \
+            --box-name "$BOX_NAME" \
+            --box-id "$BOX_ID" \
+            --booking-goals "$BOOKING_GOALS" \
+            --days-in-advance "$DAYS_IN_ADVANCE" \
+            ${FAMILY_ID:+--family-id "$FAMILY_ID"} \
+            ${PROXY:+--proxy "$PROXY"}
+
+      - name: Disconnect NordVPN
+        if: always() && env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != ''
+        run: |
+          docker rm -f nordvpn || true
+          echo "NordVPN container removed"
+
+      - name: Post-run note if skipped
+        if: env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_USERNAME == '' || env.NORDVPN_PASSWORD == '' || env.NORDVPN_COUNTRY == ''
+        run: echo "Booking step skipped: required secrets missing (EMAIL/PASSWORD/BOX_NAME/BOX_ID/NORDVPN_*)."
