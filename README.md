@@ -86,12 +86,13 @@ Add these in your GitHub repo settings under Settings > Secrets and variables > 
 
 | Secret Name | Description |
 |-------------|-------------|
-| `EMAIL` | Your AimHarder account email |
+| `EMAIL` | Your AimHarder account email (also used for NordVPN login) |
 | `PASSWORD` | Your AimHarder account password |
 | `BOX_NAME` | Sub-domain of your box (e.g. `yourboxsubdomain`) |
 | `BOX_ID` | Numeric box ID |
+| `NORD_PWD` | Your NordVPN password |
+| `NORD_COUNTRY` | NordVPN country code (e.g. `es` for Spain) |
 | `FAMILY_ID` | (Optional) Member ID if booking for a family member |
-| `PROXY` | (Optional) Proxy endpoint like `socks5://ip:port` |
 
 ### Booking Goals JSON
 The workflow sets `BOOKING_GOALS` to cover Monday (`0`) through Friday (`4`) at 07:00. Replace `CrossFit` with a distinctive part of the class name used at your box (e.g. `WOD`, `OPEN BOX`, etc.).
@@ -117,22 +118,26 @@ Check the workflow run logs for messages like:
 If repeated 403 errors appear, add a valid Spain-based proxy via the `PROXY` secret.
 
 ## NordVPN-Only Setup (Recommended for Spain IP)
-If you prefer not to manage a static proxy and only want a Spain IP via NordVPN, set these GitHub Actions secrets:
+If you prefer not to manage a static proxy and only want a Spain IP via NordVPN, set these GitHub Actions secrets (never commit them to the repo):
 
+**Required Secrets:**
 ```
-NORDVPN_USERNAME=<your nordvpn username/email>
-NORDVPN_PASSWORD=<your nordvpn password>
-NORDVPN_COUNTRY=es
+EMAIL=<your aimharder and nordvpn email>
+PASSWORD=<your aimharder password>
+BOX_NAME=<your box subdomain>
+BOX_ID=<your box numeric id>
+NORD_PWD=<your nordvpn password>
+NORD_COUNTRY=es
 ```
+
+**Note:** The workflow reuses your `EMAIL` secret for both AimHarder login and NordVPN authentication. If your NordVPN account uses a different email, you'll need to adjust the workflow file.
 
 Then ensure the workflow `book-7am.yml` has the NordVPN section enabled (already included). The workflow will:
-1. Connect to NordVPN using the provided country code (`es`).
+1. Connect to NordVPN using the provided country code (via `NORD_COUNTRY` secret).
 2. Export a SOCKS5 proxy at `socks5://127.0.0.1:1080`.
 3. Pass that proxy to the booking script automatically.
 
-You can remove any `PROXY` secret; it is no longer needed when using NordVPN-only mode.
-
-If you want to switch the exit node (e.g. Portugal) just change `NORDVPN_COUNTRY=pt` in repository secrets—no code changes required.
+If you want to switch the exit node (e.g. Portugal) just change `NORD_COUNTRY=pt` in repository secrets—no code changes required.
 
 ### NordVPN Troubleshooting
 - Connection timeout: Increase loop iterations in the workflow (change `{1..30}` to `{1..45}`).

@@ -6,7 +6,7 @@ name: Book 7AM Classes (Mon-Fri)
 # IMPORTANT: Adjust the cron times below if your box is in a different timezone.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   schedule:
     # Saturday 17:05 UTC -> Books Monday 07:00 (days_in_advance=2)
     - cron: '5 17 * * 6'
@@ -31,9 +31,9 @@ jobs:
       # Optional secrets (add them only if needed)
       FAMILY_ID: ${{ secrets.FAMILY_ID }}
       # NordVPN (required for proxy; set these secrets)
-  NORDVPN_USERNAME: ${{ secrets.NORDVPN_USERNAME }}
-  NORDVPN_PASSWORD: ${{ secrets.NORDVPN_PASSWORD }}
-  NORDVPN_COUNTRY: ${{ secrets.NORDVPN_COUNTRY }}
+      NORDVPN_USERNAME: ${{ secrets.EMAIL }}
+      NORDVPN_PASSWORD: ${{ secrets.NORD_PWD }}
+      NORDVPN_COUNTRY: ${{ secrets.NORD_COUNTRY }}
       # Booking goals: Monday(0) through Friday(4) at 07:00.
       # Replace "CrossFit" with a distinctive part of the class name at your box (e.g. WOD, OPENBOX, etc.)
       BOOKING_GOALS: '{"0":{"time":"0700","name":"CrossFit"},"1":{"time":"0700","name":"CrossFit"},"2":{"time":"0700","name":"CrossFit"},"3":{"time":"0700","name":"CrossFit"},"4":{"time":"0700","name":"CrossFit"}}'
