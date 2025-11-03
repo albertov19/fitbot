@@ -28,6 +28,8 @@ jobs:
             -e TOKEN="${NORDVPN_TOKEN}" \
             -e CONNECT="${NORDVPN_COUNTRY}" \
             -e TECHNOLOGY=NordLynx \
+            -e NETWORK=172.17.0.0/16 \
+            -e SOCKS5=on \
             ghcr.io/bubuntux/nordvpn:latest
           
           echo "Container started, waiting 5 seconds for initialization..."
