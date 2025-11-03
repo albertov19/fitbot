@@ -88,4 +88,6 @@ jobs:
 
       - name: Post-run note if skipped
         if: ${{ env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_USERNAME == '' || env.NORDVPN_PASSWORD == '' || env.NORDVPN_COUNTRY == '' }}
-        run: echo "Booking step skipped: required secrets missing (EMAIL/PASSWORD/BOX_NAME/BOX_ID/NORDVPN_*)."
+        run: |
+          echo "Booking step skipped - required secrets missing"
+
