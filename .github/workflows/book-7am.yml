@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 15
     env:
       EMAIL: ${{ secrets.EMAIL }}
-      PASSWORD: ${{ secrets.PASSWORD }}
+      PASSWORD: ${{ secrets.PWD }}
       BOX_NAME: ${{ secrets.BOX_NAME }}
       BOX_ID: ${{ secrets.BOX_ID }}
       FAMILY_ID: ${{ secrets.FAMILY_ID }}
