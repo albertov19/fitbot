@@ -110,6 +110,26 @@ jobs:
           fi
           echo "✅ VPN geo check passed for $EXPECTED"
 
+      - name: Run booking script
+        if: env.RUN_JOB == 'true' && secrets.EMAIL && secrets.PWD && secrets.BOX_NAME && secrets.BOX_ID
+        run: |
+          echo "Attempting booking for day +${DAYS_IN_ADVANCE} (target weekday)."
+          python src/main.py \
+            --email "$EMAIL" \
+            --password "$PASSWORD" \
+            --box-name "$BOX_NAME" \
+            --box-id "$BOX_ID" \
+            --booking-goals "$BOOKING_GOALS" \
+            --days-in-advance "$DAYS_IN_ADVANCE" \
+            ${FAMILY_ID:+--family-id "$FAMILY_ID"} \
+            ${PROXY:+--proxy "$PROXY"}
+
+      - name: Cleanup NordVPN
+        if: always()
+        run: |
+          docker rm -f nordlynx-proxy || true
+          echo "NordVPN container removed"
+
       - name: Post-run note if skipped/misconfigured
         if: env.RUN_JOB != 'true' || env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_TOKEN == '' || env.NORDVPN_COUNTRY == ''
         run: |
