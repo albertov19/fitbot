@@ -1,0 +1,95 @@
+name: Test NordVPN Connection
+
+on:
+  workflow_dispatch:  # Manual trigger only
+
+jobs:
+  test-vpn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NORDVPN_USERNAME: ${{ secrets.EMAIL }}
+      NORDVPN_PASSWORD: ${{ secrets.NORD_PWD }}
+      NORDVPN_COUNTRY: ${{ secrets.NORD_COUNTRY }}
+    
+    steps:
+      - name: Check IP without VPN
+        run: |
+          echo "=== IP WITHOUT VPN ==="
+          curl -s https://ipinfo.io/json | jq -r '.ip, .country, .city, .org'
+          echo ""
+
+      - name: Connect to NordVPN
+        if: ${{ env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != '' }}
+        run: |
+          echo "Starting NordVPN container for country: ${NORDVPN_COUNTRY}"
+          docker run -d --name nordvpn --cap-add=NET_ADMIN \
+            -e USER=${NORDVPN_USERNAME} \
+            -e PASS=${NORDVPN_PASSWORD} \
+            -e CONNECT=${NORDVPN_COUNTRY} \
+            ghcr.io/bubuntux/nordvpn:latest
+          
+          echo "Waiting for VPN connection..."
+          for i in {1..30}; do
+            STATUS=$(docker logs nordvpn 2>&1 | grep -i 'connected' || true)
+            if [ -n "$STATUS" ]; then 
+              echo "✅ NordVPN connected!"
+              break
+            fi
+            echo "Attempt $i/30..."
+            sleep 2
+          done
+          
+          echo ""
+          echo "=== VPN Container Logs ==="
+          docker logs nordvpn 2>&1 | tail -20
+          
+          # Export proxy for next steps
+          echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
+
+      - name: Check IP through VPN
+        if: ${{ env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != '' }}
+        run: |
+          echo ""
+          echo "=== IP THROUGH VPN (via SOCKS5 proxy) ==="
+          curl -s --proxy socks5://127.0.0.1:1080 https://ipinfo.io/json | jq -r '.ip, .country, .city, .org'
+          echo ""
+          
+          # Get country code
+          COUNTRY=$(curl -s --proxy socks5://127.0.0.1:1080 https://ipinfo.io/country)
+          echo "Detected country: $COUNTRY"
+          
+          # Verify it matches expected country
+          EXPECTED=$(echo "$NORDVPN_COUNTRY" | tr '[:lower:]' '[:upper:]')
+          if [ "$COUNTRY" = "$EXPECTED" ]; then
+            echo "✅ SUCCESS: IP is from $EXPECTED as expected!"
+          else
+            echo "⚠️  WARNING: Expected $EXPECTED but got $COUNTRY"
+            exit 1
+          fi
+
+      - name: Test AimHarder connectivity through VPN
+        if: ${{ env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != '' }}
+        run: |
+          echo ""
+          echo "=== Testing AimHarder.com through VPN ==="
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --proxy socks5://127.0.0.1:1080 https://aimharder.com)
+          echo "AimHarder HTTP response: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ AimHarder is accessible through VPN!"
+          else
+            echo "⚠️  Got HTTP $HTTP_CODE from AimHarder (might be OK, depends on their site)"
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f nordvpn || true
+          echo "VPN container removed"
+
+      - name: No VPN credentials warning
+        if: ${{ env.NORDVPN_USERNAME == '' || env.NORDVPN_PASSWORD == '' || env.NORDVPN_COUNTRY == '' }}
+        run: |
+          echo "⚠️  VPN test skipped - missing secrets:"
+          echo "Required: EMAIL, NORD_PWD, NORD_COUNTRY"
