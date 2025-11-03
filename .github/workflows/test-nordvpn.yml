@@ -6,11 +6,12 @@ on:
 jobs:
   test-vpn:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     env:
+      # Set in repo secrets; use ES for Spain
       NORDVPN_TOKEN: ${{ secrets.NORD_TOKEN }}
       NORDVPN_COUNTRY: ${{ secrets.NORD_COUNTRY }}
-    
+
     steps:
       - name: Check IP without VPN
         run: |
@@ -18,166 +19,72 @@ jobs:
           curl -s https://ipinfo.io/json | jq -r '.ip, .country, .city, .org'
           echo ""
 
-      - name: Connect to NordVPN
+      - name: Start NordLynx + SOCKS5 proxy (Spain)
         if: ${{ env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
-          echo "Starting NordVPN container for country: ${NORDVPN_COUNTRY}"
-          
-          docker run -d --name nordvpn --cap-add=NET_ADMIN \
-            -p 1080:1080 \
+          echo "Starting NordLynx proxy for country: ${NORDVPN_COUNTRY}"
+          docker run -d --name nordlynx-proxy \
+            --cap-add=NET_ADMIN --device /dev/net/tun \
             -e TOKEN="${NORDVPN_TOKEN}" \
-            -e CONNECT="${NORDVPN_COUNTRY}" \
-            -e TECHNOLOGY=NordLynx \
-            -e NETWORK=172.17.0.0/16 \
-            -e SOCKS5=on \
-            ghcr.io/bubuntux/nordvpn:latest
-          
-          echo "Container started, waiting 5 seconds for initialization..."
-          sleep 5
-          
-          echo ""
-          echo "=== Initial Container Logs ==="
-          docker logs nordvpn 2>&1
-          echo ""
-          
-          echo "Waiting for VPN connection..."
-          CONNECTED=false
-          for i in {1..30}; do
-            LOGS=$(docker logs nordvpn 2>&1)
-            
-            # Check for connection
-            if echo "$LOGS" | grep -qi 'connected'; then 
-              echo "✅ NordVPN connected on attempt $i!"
-              CONNECTED=true
+            -e COUNTRY="${NORDVPN_COUNTRY}" \
+            -p 1080:1080 -p 3128:3128 \
+            edgd1er/nordlynx-proxy:latest-ubuntu
+
+          echo "Waiting for proxy to be ready..."
+          for i in {1..40}; do
+            OUT=$(curl -s --max-time 5 -x socks5://127.0.0.1:1080 https://ipinfo.io/ip || true)
+            if [[ "$OUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "✅ Proxy is up: $OUT"
               break
             fi
-            
-            # Check for errors
-            if echo "$LOGS" | grep -qi 'error\|fail\|invalid'; then
-              echo "❌ Error detected in logs:"
-              echo "$LOGS" | grep -i 'error\|fail\|invalid'
-              break
-            fi
-            
-            echo "Attempt $i/30 - waiting..."
+            echo "Attempt $i/40..."
             sleep 2
           done
-          
-          echo ""
-          echo "=== Final Container Logs ==="
-          docker logs nordvpn 2>&1
-          echo ""
-          
-          if [ "$CONNECTED" = false ]; then
-            echo "❌ VPN failed to connect after 60 seconds"
-            echo "Container status:"
-            docker ps -a | grep nordvpn
-            exit 1
-          fi
-          
-          echo "Waiting for SOCKS5 proxy service to start..."
-          sleep 3
-          
-          # Verify SOCKS5 proxy is actually running
-          echo "Checking if SOCKS5 proxy responds..."
-          PROXY_READY=false
-          for i in {1..10}; do
-            if docker exec nordvpn pgrep -f "dante|sockd|socks" > /dev/null 2>&1; then
-              echo "✅ SOCKS5 proxy process found on attempt $i"
-              PROXY_READY=true
-              break
-            fi
-            echo "Attempt $i/10 - waiting for SOCKS5 proxy..."
-            sleep 2
-          done
-          
-          if [ "$PROXY_READY" = false ]; then
-            echo "⚠️ SOCKS5 proxy process not detected, but continuing (might be built-in)"
-          fi
-          
-          # Give it extra time to be ready for connections
-          echo "Waiting 5 more seconds for proxy to accept connections..."
-          sleep 5
-          
-          # Export proxy for next steps
+
+          # Export proxy for later steps
           echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
 
-      - name: Check IP through VPN
+      - name: Check IP through VPN (via SOCKS5)
         if: ${{ env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           echo ""
           echo "=== IP THROUGH VPN (via SOCKS5 proxy) ==="
-          
-          # Test basic connectivity first
-          echo "Testing proxy connectivity..."
-          CURL_OUTPUT=$(curl -s -x socks5://127.0.0.1:1080 --max-time 10 https://ipinfo.io/ip 2>&1)
-          CURL_EXIT=$?
-          
-          if [ $CURL_EXIT -ne 0 ]; then
-            echo "❌ Proxy connection failed (exit code: $CURL_EXIT)"
-            echo "Curl output: $CURL_OUTPUT"
-            echo ""
-            echo "=== Checking if SOCKS5 port is open ==="
-            netstat -ln | grep 1080 || echo "Port 1080 not found in netstat"
-            echo ""
-            echo "=== Trying to connect to proxy port directly ==="
-            timeout 3 bash -c "echo > /dev/tcp/127.0.0.1/1080" && echo "✅ Port accepts connections" || echo "❌ Port doesn't accept connections"
-            echo ""
-            echo "=== Container status ==="
-            docker ps | grep nordvpn
-            echo ""
-            echo "=== Full container logs ==="
-            docker logs nordvpn
-            echo ""
-            echo "=== Checking for SOCKS proxy process inside container ==="
-            docker exec nordvpn ps aux | grep -i socks || echo "No socks process found"
+          CURL_OUTPUT=$(curl -s -x "$PROXY" --max-time 10 https://ipinfo.io/json)
+          if [ -z "$CURL_OUTPUT" ]; then
+            echo "❌ Proxy didn't return data"
+            echo "=== Container logs ==="
+            docker logs nordlynx-proxy || true
             exit 1
           fi
-          
-          echo "✅ Proxy responds! IP: $CURL_OUTPUT"
-          echo ""
-          
-          # Get full IP info
-          echo "Getting location info..."
-          RESPONSE=$(curl -s --proxy socks5://127.0.0.1:1080 https://ipinfo.io/json)
-          echo "$RESPONSE" | jq -r '.ip, .country, .city, .org'
-          echo ""
-          
-          # Get country code
-          COUNTRY=$(echo "$RESPONSE" | jq -r '.country')
-          echo "Detected country: $COUNTRY"
-          
-          # Verify it matches expected country
+          echo "$CURL_OUTPUT" | jq -r '.ip, .country, .city, .org'
+          COUNTRY=$(echo "$CURL_OUTPUT" | jq -r '.country // ""')
           EXPECTED=$(echo "$NORDVPN_COUNTRY" | tr '[:lower:]' '[:upper:]')
-          if [ "$COUNTRY" = "$EXPECTED" ]; then
-            echo "✅ SUCCESS: IP is from $EXPECTED as expected!"
-          else
-            echo "⚠️  WARNING: Expected $EXPECTED but got $COUNTRY"
-            exit 1
+          if [ "$COUNTRY" != "$EXPECTED" ]; then
+            echo "⚠️ Expected $EXPECTED but got $COUNTRY"; exit 1
           fi
+          echo "✅ Geo check passed ($EXPECTED)"
 
       - name: Test AimHarder connectivity through VPN
         if: ${{ env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           echo ""
           echo "=== Testing AimHarder.com through VPN ==="
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --proxy socks5://127.0.0.1:1080 https://aimharder.com)
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -x "$PROXY" https://aimharder.com)
           echo "AimHarder HTTP response: $HTTP_CODE"
-          
           if [ "$HTTP_CODE" = "200" ]; then
             echo "✅ AimHarder is accessible through VPN!"
           else
-            echo "⚠️  Got HTTP $HTTP_CODE from AimHarder (might be OK, depends on their site)"
+            echo "⚠️ Got HTTP $HTTP_CODE from AimHarder (could still be OK depending on their redirects/CDN)."
           fi
 
       - name: Cleanup
         if: always()
         run: |
-          docker rm -f nordvpn || true
+          docker rm -f nordlynx-proxy || true
           echo "VPN container removed"
 
       - name: No VPN credentials warning
         if: ${{ env.NORDVPN_TOKEN == '' || env.NORDVPN_COUNTRY == '' }}
         run: |
-          echo "⚠️  VPN test skipped - missing secrets:"
-          echo "Required: NORD_TOKEN, NORD_COUNTRY"
+          echo "⚠️ VPN test skipped - missing secrets:"
+          echo "Required: NORD_TOKEN, NORD_COUNTRY (e.g., ES)"
