@@ -23,26 +23,57 @@ jobs:
         if: ${{ env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           echo "Starting NordVPN container for country: ${NORDVPN_COUNTRY}"
+          echo "Using credentials for: ${NORDVPN_USERNAME}"
+          
           docker run -d --name nordvpn --cap-add=NET_ADMIN \
-            -e USER=${NORDVPN_USERNAME} \
-            -e PASS=${NORDVPN_PASSWORD} \
-            -e CONNECT=${NORDVPN_COUNTRY} \
+            -e USER="${NORDVPN_USERNAME}" \
+            -e PASS="${NORDVPN_PASSWORD}" \
+            -e CONNECT="${NORDVPN_COUNTRY}" \
+            -e TECHNOLOGY=NordLynx \
             ghcr.io/bubuntux/nordvpn:latest
           
+          echo "Container started, waiting 3 seconds..."
+          sleep 3
+          
+          echo ""
+          echo "=== Initial Container Logs ==="
+          docker logs nordvpn 2>&1
+          echo ""
+          
           echo "Waiting for VPN connection..."
+          CONNECTED=false
           for i in {1..30}; do
-            STATUS=$(docker logs nordvpn 2>&1 | grep -i 'connected' || true)
-            if [ -n "$STATUS" ]; then 
-              echo "✅ NordVPN connected!"
+            LOGS=$(docker logs nordvpn 2>&1)
+            
+            # Check for connection
+            if echo "$LOGS" | grep -qi 'connected'; then 
+              echo "✅ NordVPN connected on attempt $i!"
+              CONNECTED=true
               break
             fi
-            echo "Attempt $i/30..."
+            
+            # Check for errors
+            if echo "$LOGS" | grep -qi 'error\|fail\|invalid'; then
+              echo "❌ Error detected in logs:"
+              echo "$LOGS" | grep -i 'error\|fail\|invalid'
+              break
+            fi
+            
+            echo "Attempt $i/30 - waiting..."
             sleep 2
           done
           
           echo ""
-          echo "=== VPN Container Logs ==="
-          docker logs nordvpn 2>&1 | tail -20
+          echo "=== Final Container Logs ==="
+          docker logs nordvpn 2>&1
+          echo ""
+          
+          if [ "$CONNECTED" = false ]; then
+            echo "❌ VPN failed to connect after 60 seconds"
+            echo "Container status:"
+            docker ps -a | grep nordvpn
+            exit 1
+          fi
           
           # Export proxy for next steps
           echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
