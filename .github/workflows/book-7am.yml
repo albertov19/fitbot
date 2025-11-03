@@ -1,6 +1,5 @@
 name: Book 7AM Classes (Mon-Fri)
 
-# Schedules cover both UTC offsets (DST/winter). We only "gate" when triggered by cron.
 on:
   workflow_dispatch:
     inputs:
@@ -9,8 +8,8 @@ on:
         type: boolean
         default: true
   schedule:
-    - cron: '5 17 * * *'  # matches 19:05 local in summer (UTC+2)
-    - cron: '5 18 * * *'  # matches 19:05 local in winter (UTC+1)
+    - cron: '5 17 * * *'  # 19:05 local in summer (UTC+2)
+    - cron: '5 18 * * *'  # 19:05 local in winter (UTC+1)
 
 jobs:
   book:
@@ -18,7 +17,7 @@ jobs:
     timeout-minutes: 15
     env:
       EMAIL: ${{ secrets.EMAIL }}
-      PASSWORD: ${{ secrets.PWD }}
+      PASSWORD: ${{ secrets.PWD }}          # map PWD -> PASSWORD
       BOX_NAME: ${{ secrets.BOX_NAME }}
       BOX_ID: ${{ secrets.BOX_ID }}
       FAMILY_ID: ${{ secrets.FAMILY_ID }}
@@ -31,9 +30,7 @@ jobs:
       - name: Decide whether to run
         id: gate
         run: |
-          # default: run
           echo "RUN_JOB=true" >> $GITHUB_ENV
-
           if [ "${{ github.event_name }}" = "schedule" ]; then
             TARGET="19:05"
             NOW=$(TZ=Europe/Madrid date +'%H:%M')
@@ -42,7 +39,6 @@ jobs:
               echo "RUN_JOB=false" >> $GITHUB_ENV
             fi
           else
-            # Manual run: honor the optional toggle
             if [ "${{ inputs.force_run }}" = "false" ]; then
               TARGET="19:05"
               NOW=$(TZ=Europe/Madrid date +'%H:%M')
@@ -56,21 +52,21 @@ jobs:
           fi
 
       - name: Checkout repository
-        if: env.RUN_JOB == 'true'
+        if: ${{ env.RUN_JOB == 'true' }}
         uses: actions/checkout@v4
 
       - name: Set up Python
-        if: env.RUN_JOB == 'true'
+        if: ${{ env.RUN_JOB == 'true' }}
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
-        if: env.RUN_JOB == 'true'
+        if: ${{ env.RUN_JOB == 'true' }}
         run: pip install .
 
       - name: Start NordLynx + SOCKS5 proxy (Spain)
-        if: env.RUN_JOB == 'true' && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != ''
+        if: ${{ env.RUN_JOB == 'true' && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           echo "Starting NordLynx proxy for country: ${NORDVPN_COUNTRY}"
           docker run -d --name nordlynx-proxy \
@@ -81,7 +77,7 @@ jobs:
             -e TECHNOLOGY=NordLynx \
             -p 1080:1080 -p 8888:8888 \
             edgd1er/nordlynx-proxy:latest-ubuntu
-      
+
           echo "Waiting for SOCKS proxy to be ready on 127.0.0.1:1080 ..."
           for i in {1..40}; do
             OUT=$(curl -s --max-time 5 -x socks5://127.0.0.1:1080 https://ipinfo.io/ip || true)
@@ -99,7 +95,7 @@ jobs:
             exit 1
           fi
           echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
-      
+
           echo "Verifying geo-location through proxy..."
           INFO=$(curl -s -x socks5://127.0.0.1:1080 https://ipinfo.io/json || true)
           echo "$INFO" | jq -r '.ip, .country, .city, .org'
@@ -110,10 +106,14 @@ jobs:
           fi
           echo "✅ VPN geo check passed for $EXPECTED"
 
-      - name: Run booking script
-        if: env.RUN_JOB == 'true' && secrets.EMAIL && secrets.PWD && secrets.BOX_NAME && secrets.BOX_ID
+      - name: Run booking script (Mon–Fri only)
+        if: ${{ env.RUN_JOB == 'true' && env.EMAIL != '' && env.PASSWORD != '' && env.BOX_NAME != '' && env.BOX_ID != '' }}
         run: |
-          echo "Attempting booking for day +${DAYS_IN_ADVANCE} (target weekday)."
+          DOW=$(TZ=Europe/Madrid date +%u)  # 1..7 (Mon..Sun)
+          if [ "$DOW" -gt 5 ]; then
+            echo "It's weekend; skipping."; exit 0
+          fi
+          echo "Attempting booking for +${DAYS_IN_ADVANCE} days."
           python src/main.py \
             --email "$EMAIL" \
             --password "$PASSWORD" \
@@ -131,6 +131,6 @@ jobs:
           echo "NordVPN container removed"
 
       - name: Post-run note if skipped/misconfigured
-        if: env.RUN_JOB != 'true' || env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_TOKEN == '' || env.NORDVPN_COUNTRY == ''
+        if: ${{ env.RUN_JOB != 'true' || env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_TOKEN == '' || env.NORDVPN_COUNTRY == '' }}
         run: |
           echo "Skipped or missing secrets. RUN_JOB=${RUN_JOB:-false}. Event=${{ github.event_name }}."
