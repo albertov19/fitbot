@@ -54,12 +54,15 @@ jobs:
         if: ${{ env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           echo "Starting NordVPN dockerized ephemeral container to obtain SOCKS5 proxy";
-          docker run -d --name nordvpn --cap-add=NET_ADMIN -e TOKEN=${NORDVPN_TOKEN} -e CONNECT=${NORDVPN_COUNTRY} ghcr.io/bubuntux/nordvpn:latest
+          docker run -d --name nordvpn --cap-add=NET_ADMIN -p 1080:1080 -e TOKEN=${NORDVPN_TOKEN} -e CONNECT=${NORDVPN_COUNTRY} -e TECHNOLOGY=NordLynx ghcr.io/bubuntux/nordvpn:latest
           # wait for container to establish connection
           for i in {1..30}; do
             STATUS=$(docker logs nordvpn 2>&1 | grep -i 'connected' || true)
             if [ -n "$STATUS" ]; then echo "NordVPN connected"; break; fi; sleep 2; done
           docker exec nordvpn cat /var/lib/nordvpn/data/settings.json || true
+          # Wait for SOCKS5 proxy to be ready
+          echo "Waiting for SOCKS5 proxy..."
+          sleep 5
           # Expose SOCKS5 proxy (default container sets at 127.0.0.1:1080)
           echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
           echo "Using NordVPN proxy socks5://127.0.0.1:1080"

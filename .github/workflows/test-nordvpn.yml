@@ -24,13 +24,14 @@ jobs:
           echo "Starting NordVPN container for country: ${NORDVPN_COUNTRY}"
           
           docker run -d --name nordvpn --cap-add=NET_ADMIN \
+            -p 1080:1080 \
             -e TOKEN="${NORDVPN_TOKEN}" \
             -e CONNECT="${NORDVPN_COUNTRY}" \
             -e TECHNOLOGY=NordLynx \
             ghcr.io/bubuntux/nordvpn:latest
           
-          echo "Container started, waiting 3 seconds..."
-          sleep 3
+          echo "Container started, waiting 5 seconds for initialization..."
+          sleep 5
           
           echo ""
           echo "=== Initial Container Logs ==="
@@ -71,6 +72,9 @@ jobs:
             docker ps -a | grep nordvpn
             exit 1
           fi
+          
+          echo "Waiting for SOCKS5 proxy to be ready..."
+          sleep 5
           
           # Export proxy for next steps
           echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
