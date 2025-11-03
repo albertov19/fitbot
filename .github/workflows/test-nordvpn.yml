@@ -84,11 +84,32 @@ jobs:
         run: |
           echo ""
           echo "=== IP THROUGH VPN (via SOCKS5 proxy) ==="
-          curl -s --proxy socks5://127.0.0.1:1080 https://ipinfo.io/json | jq -r '.ip, .country, .city, .org'
+          
+          # Test basic connectivity first
+          echo "Testing proxy connectivity..."
+          if ! curl -s -x socks5://127.0.0.1:1080 --max-time 10 https://ipinfo.io/ip; then
+            echo "❌ Proxy connection failed"
+            echo ""
+            echo "=== Checking if SOCKS5 port is open ==="
+            netstat -ln | grep 1080 || echo "Port 1080 not found in netstat"
+            echo ""
+            echo "=== Container status ==="
+            docker ps | grep nordvpn
+            echo ""
+            echo "=== Recent container logs ==="
+            docker logs --tail 50 nordvpn
+            exit 1
+          fi
+          echo ""
+          
+          # Get full IP info
+          echo "Getting location info..."
+          RESPONSE=$(curl -s --proxy socks5://127.0.0.1:1080 https://ipinfo.io/json)
+          echo "$RESPONSE" | jq -r '.ip, .country, .city, .org'
           echo ""
           
           # Get country code
-          COUNTRY=$(curl -s --proxy socks5://127.0.0.1:1080 https://ipinfo.io/country)
+          COUNTRY=$(echo "$RESPONSE" | jq -r '.country')
           echo "Detected country: $COUNTRY"
           
           # Verify it matches expected country
