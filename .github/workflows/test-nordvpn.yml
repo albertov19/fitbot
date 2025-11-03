@@ -73,7 +73,28 @@ jobs:
             exit 1
           fi
           
-          echo "Waiting for SOCKS5 proxy to be ready..."
+          echo "Waiting for SOCKS5 proxy service to start..."
+          sleep 3
+          
+          # Verify SOCKS5 proxy is actually running
+          echo "Checking if SOCKS5 proxy responds..."
+          PROXY_READY=false
+          for i in {1..10}; do
+            if docker exec nordvpn pgrep -f "dante|sockd|socks" > /dev/null 2>&1; then
+              echo "✅ SOCKS5 proxy process found on attempt $i"
+              PROXY_READY=true
+              break
+            fi
+            echo "Attempt $i/10 - waiting for SOCKS5 proxy..."
+            sleep 2
+          done
+          
+          if [ "$PROXY_READY" = false ]; then
+            echo "⚠️ SOCKS5 proxy process not detected, but continuing (might be built-in)"
+          fi
+          
+          # Give it extra time to be ready for connections
+          echo "Waiting 5 more seconds for proxy to accept connections..."
           sleep 5
           
           # Export proxy for next steps
@@ -87,19 +108,31 @@ jobs:
           
           # Test basic connectivity first
           echo "Testing proxy connectivity..."
-          if ! curl -s -x socks5://127.0.0.1:1080 --max-time 10 https://ipinfo.io/ip; then
-            echo "❌ Proxy connection failed"
+          CURL_OUTPUT=$(curl -s -x socks5://127.0.0.1:1080 --max-time 10 https://ipinfo.io/ip 2>&1)
+          CURL_EXIT=$?
+          
+          if [ $CURL_EXIT -ne 0 ]; then
+            echo "❌ Proxy connection failed (exit code: $CURL_EXIT)"
+            echo "Curl output: $CURL_OUTPUT"
             echo ""
             echo "=== Checking if SOCKS5 port is open ==="
             netstat -ln | grep 1080 || echo "Port 1080 not found in netstat"
             echo ""
+            echo "=== Trying to connect to proxy port directly ==="
+            timeout 3 bash -c "echo > /dev/tcp/127.0.0.1/1080" && echo "✅ Port accepts connections" || echo "❌ Port doesn't accept connections"
+            echo ""
             echo "=== Container status ==="
             docker ps | grep nordvpn
             echo ""
-            echo "=== Recent container logs ==="
-            docker logs --tail 50 nordvpn
+            echo "=== Full container logs ==="
+            docker logs nordvpn
+            echo ""
+            echo "=== Checking for SOCKS proxy process inside container ==="
+            docker exec nordvpn ps aux | grep -i socks || echo "No socks process found"
             exit 1
           fi
+          
+          echo "✅ Proxy responds! IP: $CURL_OUTPUT"
           echo ""
           
           # Get full IP info
