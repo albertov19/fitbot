@@ -31,8 +31,7 @@ jobs:
       # Optional secrets (add them only if needed)
       FAMILY_ID: ${{ secrets.FAMILY_ID }}
       # NordVPN (required for proxy; set these secrets)
-      NORDVPN_USERNAME: ${{ secrets.EMAIL }}
-      NORDVPN_PASSWORD: ${{ secrets.NORD_PWD }}
+      NORDVPN_TOKEN: ${{ secrets.NORD_TOKEN }}
       NORDVPN_COUNTRY: ${{ secrets.NORD_COUNTRY }}
       # Booking goals: Monday(0) through Friday(4) at 07:00.
       # Replace "CrossFit" with a distinctive part of the class name at your box (e.g. WOD, OPENBOX, etc.)
@@ -52,10 +51,10 @@ jobs:
           pip install .
 
       - name: Connect NordVPN (Spain proxy enforced)
-        if: ${{ env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != '' }}
+        if: ${{ env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           echo "Starting NordVPN dockerized ephemeral container to obtain SOCKS5 proxy";
-          docker run -d --name nordvpn --cap-add=NET_ADMIN -e USER=${NORDVPN_USERNAME} -e PASS=${NORDVPN_PASSWORD} -e CONNECT=${NORDVPN_COUNTRY} ghcr.io/bubuntux/nordvpn:latest
+          docker run -d --name nordvpn --cap-add=NET_ADMIN -e TOKEN=${NORDVPN_TOKEN} -e CONNECT=${NORDVPN_COUNTRY} ghcr.io/bubuntux/nordvpn:latest
           # wait for container to establish connection
           for i in {1..30}; do
             STATUS=$(docker logs nordvpn 2>&1 | grep -i 'connected' || true)
@@ -67,7 +66,7 @@ jobs:
 
       - name: Run booking script
         # Only run if mandatory secrets are present
-        if: ${{ env.EMAIL != '' && env.PASSWORD != '' && env.BOX_NAME != '' && env.BOX_ID != '' && env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != '' }}
+        if: ${{ env.EMAIL != '' && env.PASSWORD != '' && env.BOX_NAME != '' && env.BOX_ID != '' && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           echo "Attempting booking for day +${DAYS_IN_ADVANCE} (target weekday).";
           python src/main.py \
@@ -81,13 +80,13 @@ jobs:
             ${PROXY:+--proxy "$PROXY"}
 
       - name: Disconnect NordVPN
-        if: ${{ always() && env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != '' }}
+        if: ${{ always() && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           docker rm -f nordvpn || true
           echo "NordVPN container removed"
 
       - name: Post-run note if skipped
-        if: ${{ env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_USERNAME == '' || env.NORDVPN_PASSWORD == '' || env.NORDVPN_COUNTRY == '' }}
+        if: ${{ env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_TOKEN == '' || env.NORDVPN_COUNTRY == '' }}
         run: |
           echo "Booking step skipped - required secrets missing"
 

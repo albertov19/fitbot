@@ -86,11 +86,11 @@ Add these in your GitHub repo settings under Settings > Secrets and variables > 
 
 | Secret Name | Description |
 |-------------|-------------|
-| `EMAIL` | Your AimHarder account email (also used for NordVPN login) |
+| `EMAIL` | Your AimHarder account email |
 | `PASSWORD` | Your AimHarder account password |
 | `BOX_NAME` | Sub-domain of your box (e.g. `yourboxsubdomain`) |
 | `BOX_ID` | Numeric box ID |
-| `NORD_PWD` | Your NordVPN password |
+| `NORD_TOKEN` | Your NordVPN access token (get from account.nordvpn.com) |
 | `NORD_COUNTRY` | NordVPN country code (e.g. `es` for Spain) |
 | `FAMILY_ID` | (Optional) Member ID if booking for a family member |
 
@@ -122,15 +122,22 @@ If you prefer not to manage a static proxy and only want a Spain IP via NordVPN,
 
 **Required Secrets:**
 ```
-EMAIL=<your aimharder and nordvpn email>
+EMAIL=<your aimharder email>
 PASSWORD=<your aimharder password>
 BOX_NAME=<your box subdomain>
 BOX_ID=<your box numeric id>
-NORD_PWD=<your nordvpn password>
+NORD_TOKEN=<your nordvpn access token>
 NORD_COUNTRY=es
 ```
 
-**Note:** The workflow reuses your `EMAIL` secret for both AimHarder login and NordVPN authentication. If your NordVPN account uses a different email, you'll need to adjust the workflow file.
+### How to Get Your NordVPN Access Token
+
+1. Go to https://my.nordaccount.com/dashboard/nordvpn/access-tokens
+2. Click **"Generate New Token"**
+3. Give it a name (e.g., "GitHub Actions")
+4. Copy the token and add it as `NORD_TOKEN` secret in GitHub
+
+**Note:** NordVPN no longer uses username/password for API access - you MUST use an access token.
 
 Then ensure the workflow `book-7am.yml` has the NordVPN section enabled (already included). The workflow will:
 1. Connect to NordVPN using the provided country code (via `NORD_COUNTRY` secret).

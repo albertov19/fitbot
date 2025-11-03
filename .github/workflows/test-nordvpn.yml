@@ -8,8 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      NORDVPN_USERNAME: ${{ secrets.EMAIL }}
-      NORDVPN_PASSWORD: ${{ secrets.NORD_PWD }}
+      NORDVPN_TOKEN: ${{ secrets.NORD_TOKEN }}
       NORDVPN_COUNTRY: ${{ secrets.NORD_COUNTRY }}
     
     steps:
@@ -20,14 +19,12 @@ jobs:
           echo ""
 
       - name: Connect to NordVPN
-        if: ${{ env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != '' }}
+        if: ${{ env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           echo "Starting NordVPN container for country: ${NORDVPN_COUNTRY}"
-          echo "Using credentials for: ${NORDVPN_USERNAME}"
           
           docker run -d --name nordvpn --cap-add=NET_ADMIN \
-            -e USER="${NORDVPN_USERNAME}" \
-            -e PASS="${NORDVPN_PASSWORD}" \
+            -e TOKEN="${NORDVPN_TOKEN}" \
             -e CONNECT="${NORDVPN_COUNTRY}" \
             -e TECHNOLOGY=NordLynx \
             ghcr.io/bubuntux/nordvpn:latest
@@ -79,7 +76,7 @@ jobs:
           echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
 
       - name: Check IP through VPN
-        if: ${{ env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != '' }}
+        if: ${{ env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           echo ""
           echo "=== IP THROUGH VPN (via SOCKS5 proxy) ==="
@@ -100,7 +97,7 @@ jobs:
           fi
 
       - name: Test AimHarder connectivity through VPN
-        if: ${{ env.NORDVPN_USERNAME != '' && env.NORDVPN_PASSWORD != '' && env.NORDVPN_COUNTRY != '' }}
+        if: ${{ env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           echo ""
           echo "=== Testing AimHarder.com through VPN ==="
@@ -120,7 +117,7 @@ jobs:
           echo "VPN container removed"
 
       - name: No VPN credentials warning
-        if: ${{ env.NORDVPN_USERNAME == '' || env.NORDVPN_PASSWORD == '' || env.NORDVPN_COUNTRY == '' }}
+        if: ${{ env.NORDVPN_TOKEN == '' || env.NORDVPN_COUNTRY == '' }}
         run: |
           echo "⚠️  VPN test skipped - missing secrets:"
-          echo "Required: EMAIL, NORD_PWD, NORD_COUNTRY"
+          echo "Required: NORD_TOKEN, NORD_COUNTRY"
