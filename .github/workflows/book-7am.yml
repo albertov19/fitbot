@@ -1,15 +1,16 @@
 name: Book 7AM Classes (Mon-Fri)
 
-# Runs at 19:05 Europe/Madrid two days before the target 07:00 class.
-# GitHub cron is UTC; Madrid is UTC+1 in winter and UTC+2 in summer.
-# We schedule BOTH 17:05 and 18:05 UTC and gate by local time in the first step.
-
+# Schedules cover both UTC offsets (DST/winter). We only "gate" when triggered by cron.
 on:
   workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Run immediately (ignore 19:05 Europe/Madrid gate)'
+        type: boolean
+        default: true
   schedule:
-    # 17:05 UTC (summer) and 18:05 UTC (winter) every day
-    - cron: '5 17 * * *'
-    - cron: '5 18 * * *'
+    - cron: '5 17 * * *'  # matches 19:05 local in summer (UTC+2)
+    - cron: '5 18 * * *'  # matches 19:05 local in winter (UTC+1)
 
 jobs:
   book:
@@ -21,24 +22,37 @@ jobs:
       BOX_NAME: ${{ secrets.BOX_NAME }}
       BOX_ID: ${{ secrets.BOX_ID }}
       FAMILY_ID: ${{ secrets.FAMILY_ID }}
-      # VPN (make sure NORD_COUNTRY=ES for Spain)
       NORDVPN_TOKEN: ${{ secrets.NORD_TOKEN }}
       NORDVPN_COUNTRY: ${{ secrets.NORD_COUNTRY }} # e.g., ES
-      # Booking goals Mon(0)..Fri(4) at 07:00 named "CrossFit"
       BOOKING_GOALS: '{"0":{"time":"0700","name":"CrossFit"},"1":{"time":"0700","name":"CrossFit"},"2":{"time":"0700","name":"CrossFit"},"3":{"time":"0700","name":"CrossFit"},"4":{"time":"0700","name":"CrossFit"}}'
       DAYS_IN_ADVANCE: 2
 
     steps:
-      - name: Gate by local time (must be 19:05 Europe/Madrid)
+      - name: Decide whether to run
         id: gate
         run: |
-          TARGET="19:05"
-          NOW=$(TZ=Europe/Madrid date +'%H:%M')
-          echo "Local Europe/Madrid time is $NOW; target is $TARGET"
-          if [ "$NOW" = "$TARGET" ]; then
-            echo "RUN_JOB=true" >> $GITHUB_ENV
+          # default: run
+          echo "RUN_JOB=true" >> $GITHUB_ENV
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            TARGET="19:05"
+            NOW=$(TZ=Europe/Madrid date +'%H:%M')
+            echo "Scheduled run. Europe/Madrid time is $NOW; target is $TARGET"
+            if [ "$NOW" != "$TARGET" ]; then
+              echo "RUN_JOB=false" >> $GITHUB_ENV
+            fi
           else
-            echo "RUN_JOB=false" >> $GITHUB_ENV
+            # Manual run: honor the optional toggle
+            if [ "${{ inputs.force_run }}" = "false" ]; then
+              TARGET="19:05"
+              NOW=$(TZ=Europe/Madrid date +'%H:%M')
+              echo "Manual run with force_run=false. Local time $NOW, target $TARGET"
+              if [ "$NOW" != "$TARGET" ]; then
+                echo "RUN_JOB=false" >> $GITHUB_ENV
+              fi
+            else
+              echo "Manual run with force_run=true → proceeding regardless of time."
+            fi
           fi
 
       - name: Checkout repository
@@ -53,8 +67,7 @@ jobs:
 
       - name: Install dependencies
         if: env.RUN_JOB == 'true'
-        run: |
-          pip install .
+        run: pip install .
 
       - name: Start NordLynx + SOCKS5 proxy (Spain)
         if: env.RUN_JOB == 'true' && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != ''
@@ -68,17 +81,14 @@ jobs:
             edgd1er/nordlynx-proxy:latest-ubuntu
 
           echo "Waiting for proxy to be ready..."
-          for i in {1..30}; do
-            # Try via SOCKS5; success when we get an IP back
+          for i in {1..40}; do
             OUT=$(curl -s --max-time 5 -x socks5://127.0.0.1:1080 https://ipinfo.io/ip || true)
             if [[ "$OUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "✅ Proxy is up: $OUT"
-              break
+              echo "✅ Proxy is up: $OUT"; break
             fi
-            sleep 2
+            echo "Attempt $i/40..."; sleep 2
           done
 
-          # Export proxy for the booking script
           echo "PROXY=socks5://127.0.0.1:1080" >> $GITHUB_ENV
 
           echo "Verifying location through proxy..."
@@ -94,11 +104,9 @@ jobs:
       - name: Run booking script (Mon-Fri only)
         if: env.RUN_JOB == 'true' && env.EMAIL != '' && env.PASSWORD != '' && env.BOX_NAME != '' && env.BOX_ID != '' && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != ''
         run: |
-          # Only attempt on Mon-Fri targets:
-          DOW=$(TZ=Europe/Madrid date +%u)         # 1..7 (Mon..Sun)
+          DOW=$(TZ=Europe/Madrid date +%u)  # 1..7 (Mon..Sun)
           if [ "$DOW" -gt 5 ]; then
-            echo "It's weekend; skipping."
-            exit 0
+            echo "It's weekend; skipping."; exit 0
           fi
 
           echo "Attempting booking for +${DAYS_IN_ADVANCE} days."
@@ -121,4 +129,4 @@ jobs:
       - name: Post-run note if skipped/misconfigured
         if: env.RUN_JOB != 'true' || env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_TOKEN == '' || env.NORDVPN_COUNTRY == ''
         run: |
-          echo "Skipped or missing secrets. RUN_JOB=${RUN_JOB:-false}"
+          echo "Skipped or missing secrets. RUN_JOB=${RUN_JOB:-false}. Event=${{ github.event_name }}."
