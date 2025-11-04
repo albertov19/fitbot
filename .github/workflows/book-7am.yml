@@ -6,14 +6,66 @@ on:
       force_run:
         description: "Run immediately (ignore 19:05 Europe/Madrid gate)"
         type: boolean
-        default: true
+        default: false
   schedule:
     # GitHub Actions cron is UTC. Two entries handle DST; restricted to Sat–Wed.
-    - cron: "5 17 * * 6,0-3"  # 19:05 local in summer (UTC+2): Sat, Sun, Mon, Tue, Wed
-    - cron: "5 18 * * 6,0-3"  # 19:05 local in winter (UTC+1): Sat, Sun, Mon, Tue, Wed
+    - cron: "5 17 * * 6,0-3"  # Summer → ~19:05 local ; Winter → ~18:05 local
+    - cron: "5 18 * * 6,0-3"  # Winter → ~19:05 local ; Summer → ~20:05 local
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run_job: ${{ steps.gate.outputs.run_job }}
+    steps:
+      - name: Decide whether to run (Europe/Madrid 19:05±20m, Sat–Wed)
+        id: gate
+        shell: bash
+        run: |
+          run_job=true
+
+          TARGET_HM="19:05"
+          NOW_HM=$(TZ=Europe/Madrid date +'%H:%M')
+          DOW=$(TZ=Europe/Madrid date +%u) # 1..7 (Mon..Sun)
+
+          echo "Event=${{ github.event_name }} | Local time now: $NOW_HM | target: $TARGET_HM | DOW=$DOW"
+
+          within_window() {
+            # allow 10-minute window [19:05, 19:15)
+            now_s=$(TZ=Europe/Madrid date -d "today $NOW_HM" +%s)
+            tgt_s=$(TZ=Europe/Madrid date -d "today $TARGET_HM" +%s)
+            diff=$(( now_s - tgt_s ))
+            [ $diff -ge 0 ] && [ $diff -lt 1200 ]
+          }
+
+          # Sat(6), Sun(7), Mon(1), Tue(2), Wed(3)
+          is_sat_to_wed() {
+            [ "$DOW" = "6" ] || [ "$DOW" = "7" ] || [ "$DOW" = "1" ] || [ "$DOW" = "2" ] || [ "$DOW" = "3" ]
+          }
+
+          if ! is_sat_to_wed; then
+            run_job=false
+            echo "Not Sat–Wed -> skipping."
+          else
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              if ! within_window; then
+                run_job=false
+                echo "Outside 19:05±10m gate -> skipping."
+              fi
+            else
+              # manual runs only proceed if force_run=true or we are within the window
+              if [ "${{ inputs.force_run }}" = "false" ] && ! within_window; then
+                run_job=false
+                echo "Manual run with force_run=false and outside window -> skipping."
+              fi
+            fi
+          fi
+
+          echo "run_job=$run_job" >> "$GITHUB_OUTPUT"
+
   book:
+    needs: gate
+    if: ${{ needs.gate.outputs.run_job == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -26,59 +78,22 @@ jobs:
       NORDVPN_COUNTRY: ${{ secrets.NORD_COUNTRY }} # e.g., ES
       BOOKING_GOALS: '{"0":{"time":"0700","name":"CrossFit"},"1":{"time":"0700","name":"CrossFit"},"2":{"time":"0700","name":"CrossFit"},"3":{"time":"0700","name":"CrossFit"},"4":{"time":"0700","name":"CrossFit"}}'
       DAYS_IN_ADVANCE: 2
-
     steps:
-      - name: Decide whether to run
-        id: gate
-        run: |
-          echo "RUN_JOB=true" >> "$GITHUB_ENV"
-
-          TARGET_HM="19:05"
-          NOW_HM=$(TZ=Europe/Madrid date +'%H:%M')
-          echo "Event=${{ github.event_name }} | Local Europe/Madrid time now: $NOW_HM | target: $TARGET_HM"
-
-          within_window() {
-            # allow 10-minute window starting at 19:05 -> [19:05, 19:15)
-            now_s=$(TZ=Europe/Madrid date -d "today $NOW_HM" +%s)
-            tgt_s=$(TZ=Europe/Madrid date -d "today $TARGET_HM" +%s)
-            diff=$(( now_s - tgt_s ))
-            [ $diff -ge 0 ] && [ $diff -lt 600 ]  # 0..599 seconds
-          }
-
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            if ! within_window; then
-              echo "RUN_JOB=false" >> "$GITHUB_ENV"
-              echo "Outside allowed window -> skipping."
-            fi
-          else
-            if [ "${{ inputs.force_run }}" = "false" ] && ! within_window; then
-              echo "RUN_JOB=false" >> "$GITHUB_ENV"
-              echo "Manual run with force_run=false but outside window -> skipping."
-            else
-              echo "Manual run allowed -> proceeding."
-            fi
-          fi
-
       - name: Checkout repository
-        if: ${{ env.RUN_JOB == 'true' }}
         uses: actions/checkout@v4
 
       - name: Set up Python
-        if: ${{ env.RUN_JOB == 'true' }}
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install system deps (jq)
-        if: ${{ env.RUN_JOB == 'true' }}
         run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Install Python deps
-        if: ${{ env.RUN_JOB == 'true' }}
         run: pip install .
 
       - name: Build booking goals (HYRO Tue on odd weeks, Wed on even)
-        if: ${{ env.RUN_JOB == 'true' }}
         run: |
           TARGET_DATE=$(TZ=Europe/Madrid date -d "+${DAYS_IN_ADVANCE} day" +%F)
           ISO_WEEK=$(TZ=Europe/Madrid date -d "$TARGET_DATE" +%V)   # 01..53
@@ -101,7 +116,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Start NordLynx + SOCKS5 proxy (Spain)
-        if: ${{ env.RUN_JOB == 'true' && env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
+        if: ${{ env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
         run: |
           echo "Starting NordLynx proxy for country: ${NORDVPN_COUNTRY}"
           docker run -d --name nordlynx-proxy \
@@ -140,15 +155,8 @@ jobs:
           fi
           echo "✅ VPN geo check passed for $EXPECTED"
 
-      - name: Run booking script (Sat–Wed only)
-        if: ${{ env.RUN_JOB == 'true' && env.EMAIL != '' && env.PASSWORD != '' && env.BOX_NAME != '' && env.BOX_ID != '' }}
+      - name: Run booking script
         run: |
-          # %u: 1..7 (Mon..Sun). We want Sat(6), Sun(7), Mon(1), Tue(2), Wed(3).
-          DOW=$(TZ=Europe/Madrid date +%u)
-          if [ "$DOW" = "4" ] || [ "$DOW" = "5" ]; then
-            echo "It's Thu/Fri; skipping."; exit 0
-          fi
-
           echo "Attempting booking for +${DAYS_IN_ADVANCE} days."
           python src/main.py \
             --email "$EMAIL" \
@@ -162,11 +170,4 @@ jobs:
 
       - name: Cleanup NordVPN
         if: always()
-        run: |
-          docker rm -f nordlynx-proxy || true
-          echo "NordVPN container removed"
-
-      - name: Post-run note if skipped/misconfigured
-        if: ${{ env.RUN_JOB != 'true' || env.EMAIL == '' || env.PASSWORD == '' || env.BOX_NAME == '' || env.BOX_ID == '' || env.NORDVPN_TOKEN == '' || env.NORDVPN_COUNTRY == '' }}
-        run: |
-          echo "Skipped or missing secrets. RUN_JOB=${RUN_JOB:-false}. Event=${{ github.event_name }}."
+        run: docker rm -f nordlynx-proxy || true
