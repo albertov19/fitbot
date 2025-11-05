@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       force_run:
-        description: "Run immediately (ignore 19:05 Europe/Madrid gate)"
+        description: "Run immediately (ignore ≥19:05 Europe/Madrid gate)"
         type: boolean
         default: false
   schedule:
@@ -18,7 +18,7 @@ jobs:
     outputs:
       run_job: ${{ steps.gate.outputs.run_job }}
     steps:
-      - name: Decide whether to run (Europe/Madrid 19:05±20m, Sat–Wed)
+      - name: Decide whether to run (Europe/Madrid ≥19:05, Sat–Wed)
         id: gate
         shell: bash
         run: |
@@ -26,21 +26,19 @@ jobs:
 
           TARGET_HM="19:05"
           NOW_HM=$(TZ=Europe/Madrid date +'%H:%M')
+          NOW_S=$(TZ=Europe/Madrid date +%s)
+          TGT_S=$(TZ=Europe/Madrid date -d "today $TARGET_HM" +%s)
           DOW=$(TZ=Europe/Madrid date +%u) # 1..7 (Mon..Sun)
 
           echo "Event=${{ github.event_name }} | Local time now: $NOW_HM | target: $TARGET_HM | DOW=$DOW"
 
-          within_window() {
-            # allow 10-minute window [19:05, 19:15)
-            now_s=$(TZ=Europe/Madrid date -d "today $NOW_HM" +%s)
-            tgt_s=$(TZ=Europe/Madrid date -d "today $TARGET_HM" +%s)
-            diff=$(( now_s - tgt_s ))
-            [ $diff -ge 0 ] && [ $diff -lt 1200 ]
-          }
-
           # Sat(6), Sun(7), Mon(1), Tue(2), Wed(3)
           is_sat_to_wed() {
             [ "$DOW" = "6" ] || [ "$DOW" = "7" ] || [ "$DOW" = "1" ] || [ "$DOW" = "2" ] || [ "$DOW" = "3" ]
+          }
+
+          is_after_target() {
+            [ "$NOW_S" -ge "$TGT_S" ]
           }
 
           if ! is_sat_to_wed; then
@@ -48,15 +46,15 @@ jobs:
             echo "Not Sat–Wed -> skipping."
           else
             if [ "${{ github.event_name }}" = "schedule" ]; then
-              if ! within_window; then
+              if ! is_after_target; then
                 run_job=false
-                echo "Outside 19:05±10m gate -> skipping."
+                echo "Before 19:05 -> skipping."
               fi
             else
-              # manual runs only proceed if force_run=true or we are within the window
-              if [ "${{ inputs.force_run }}" = "false" ] && ! within_window; then
+              # Manual runs only proceed if force_run=true or we are after the target time
+              if [ "${{ inputs.force_run }}" = "false" ] && ! is_after_target; then
                 run_job=false
-                echo "Manual run with force_run=false and outside window -> skipping."
+                echo "Manual run with force_run=false and before 19:05 -> skipping."
               fi
             fi
           fi
