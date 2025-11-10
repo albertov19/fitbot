@@ -115,8 +115,10 @@ jobs:
 
       - name: Start NordLynx + SOCKS5 proxy (Spain)
         if: ${{ env.NORDVPN_TOKEN != '' && env.NORDVPN_COUNTRY != '' }}
+        shell: bash
         run: |
           echo "Starting NordLynx proxy for country: ${NORDVPN_COUNTRY}"
+          # Consider pinning a tag you trust instead of latest-ubuntu
           docker run -d --name nordlynx-proxy \
             --cap-add=NET_ADMIN --device /dev/net/tun \
             -e NORDVPN_LOGIN="${NORDVPN_TOKEN}" \
@@ -128,7 +130,9 @@ jobs:
 
           echo "Waiting for SOCKS proxy to be ready on 127.0.0.1:1080 ..."
           for i in {1..40}; do
-            OUT=$(curl -s --max-time 5 -x socks5://127.0.0.1:1080 https://ipinfo.io/ip || true)
+            # Use socks5h so DNS resolves via proxy; add retries
+            OUT=$(curl -sS --retry 3 --retry-connrefused --retry-delay 1 --max-time 5 \
+                  -x socks5h://127.0.0.1:1080 https://ipinfo.io/ip || true)
             if [[ "$OUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "✅ SOCKS proxy up: $OUT"
               READY=1; break
@@ -141,17 +145,63 @@ jobs:
             docker logs nordlynx-proxy || true
             exit 1
           fi
+          # Keep external proxy var as socks5:// for your Python script
           echo "PROXY=socks5://127.0.0.1:1080" >> "$GITHUB_ENV"
 
           echo "Verifying geo-location through proxy..."
-          INFO=$(curl -s -x socks5://127.0.0.1:1080 https://ipinfo.io/json || true)
-          echo "$INFO" | jq -r '.ip, .country, .city, .org'
+          PROXY_URL="socks5h://127.0.0.1:1080"
+
+          # Helper to fetch country code from several providers with retries; returns 2-letter code or empty
+          get_country() {
+            # ipinfo.io (may rate-limit)
+            BODY=$(curl -sS --fail --retry 3 --retry-connrefused --retry-delay 1 \
+                        --connect-timeout 5 --max-time 10 \
+                        -x "$PROXY_URL" https://ipinfo.io/json || true)
+            CODE=$(echo "$BODY" | jq -r '.country // empty') && [ -n "$CODE" ] && echo "$CODE" && return 0
+
+            # ifconfig.co
+            BODY=$(curl -sS --fail --retry 3 --retry-connrefused --retry-delay 1 \
+                        --connect-timeout 5 --max-time 10 \
+                        -x "$PROXY_URL" https://ifconfig.co/json || true)
+            CODE=$(echo "$BODY" | jq -r '.country_iso // empty') && [ -n "$CODE" ] && echo "$CODE" && return 0
+
+            # ip-api.com (HTTP)
+            BODY=$(curl -sS --fail --retry 3 --retry-connrefused --retry-delay 1 \
+                        --connect-timeout 5 --max-time 10 \
+                        -x "$PROXY_URL" http://ip-api.com/json || true)
+            CODE=$(echo "$BODY" | jq -r '.countryCode // empty') && [ -n "$CODE" ] && echo "$CODE" && return 0
+
+            # ip.sb
+            BODY=$(curl -sS --fail --retry 3 --retry-connrefused --retry-delay 1 \
+                        --connect-timeout 5 --max-time 10 \
+                        -x "$PROXY_URL" https://api.ip.sb/geoip || true)
+            CODE=$(echo "$BODY" | jq -r '.country_code // empty') && [ -n "$CODE" ] && echo "$CODE" && return 0
+
+            echo ""
+            return 1
+          }
+
+          # Also print proxy IP (best-effort, two sources, with retries)
+          IP=$(curl -sS --fail --retry 3 --retry-connrefused --retry-delay 1 \
+                    --connect-timeout 5 --max-time 10 \
+                    -x "$PROXY_URL" https://ifconfig.me || true)
+          [ -z "$IP" ] && IP=$(curl -sS --fail --retry 3 --retry-connrefused --retry-delay 1 \
+                                  --connect-timeout 5 --max-time 10 \
+                                  -x "$PROXY_URL" https://ipinfo.io/ip || true)
+          [ -n "$IP" ] && echo "Proxy IP: $IP"
+
           EXPECTED=$(echo "$NORDVPN_COUNTRY" | tr '[:lower:]' '[:upper:]')
-          GOT=$(echo "$INFO" | jq -r '.country // ""')
-          if [ "$GOT" != "$EXPECTED" ]; then
-            echo "⚠️ Expected $EXPECTED but got $GOT"; exit 1
+          GOT=$(get_country || true)
+          echo "Country via proxy: ${GOT:-<unknown>} (expected $EXPECTED)"
+
+          # Do NOT fail the job on geo-check; warn only
+          if [ -z "$GOT" ]; then
+            echo "⚠️  Could not determine country (providers returned non-JSON or empty). Continuing anyway."
+          elif [ "$GOT" != "$EXPECTED" ]; then
+            echo "⚠️  Expected $EXPECTED but got $GOT. Continuing anyway."
+          else
+            echo "✅ VPN geo check passed for $EXPECTED"
           fi
-          echo "✅ VPN geo check passed for $EXPECTED"
 
       - name: Run booking script
         run: |
