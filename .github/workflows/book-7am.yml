@@ -7,10 +7,13 @@ on:
         description: "Run immediately (ignore ≥19:05 Europe/Madrid gate)"
         type: boolean
         default: false
+
   schedule:
-    # GitHub Actions cron is UTC. Two entries handle DST; restricted to Sat–Wed.
-    - cron: "5 17 * * 6,0-3"  # Summer → ~19:05 local ; Winter → ~18:05 local
-    - cron: "5 18 * * 6,0-3"  # Winter → ~19:05 local ; Summer → ~20:05 local
+    # GitHub Actions cron is UTC.
+    # For Europe/Madrid WINTER time (UTC+1): 17:30 UTC = 18:30 local
+    - cron: "30 17 * * 6,0-3"
+    # For SUMMER time (UTC+2), switch manually to:
+    # - cron: "30 16 * * 6,0-3"  # 16:30 UTC = 18:30 local
 
 jobs:
   gate:
@@ -18,44 +21,59 @@ jobs:
     outputs:
       run_job: ${{ steps.gate.outputs.run_job }}
     steps:
-      - name: Decide whether to run (Europe/Madrid ≥19:05, Sat–Wed)
+      - name: Wait until Europe/Madrid ≥19:05 (Sat–Wed)
         id: gate
         shell: bash
         run: |
           run_job=true
 
           TARGET_HM="19:05"
-          NOW_HM=$(TZ=Europe/Madrid date +'%H:%M')
-          NOW_S=$(TZ=Europe/Madrid date +%s)
-          TGT_S=$(TZ=Europe/Madrid date -d "today $TARGET_HM" +%s)
-          DOW=$(TZ=Europe/Madrid date +%u) # 1..7 (Mon..Sun)
+          TZSTR="Europe/Madrid"
 
-          echo "Event=${{ github.event_name }} | Local time now: $NOW_HM | target: $TARGET_HM | DOW=$DOW"
+          # Day of week: 1..7 (Mon..Sun)
+          DOW=$(TZ=$TZSTR date +%u)
+
+          echo "Event=${{ github.event_name }} | TZ=$TZSTR | DOW=$DOW"
 
           # Sat(6), Sun(7), Mon(1), Tue(2), Wed(3)
           is_sat_to_wed() {
             [ "$DOW" = "6" ] || [ "$DOW" = "7" ] || [ "$DOW" = "1" ] || [ "$DOW" = "2" ] || [ "$DOW" = "3" ]
           }
 
-          is_after_target() {
-            [ "$NOW_S" -ge "$TGT_S" ]
-          }
-
           if ! is_sat_to_wed; then
+            echo "Not Sat–Wed -> skipping workflow."
             run_job=false
-            echo "Not Sat–Wed -> skipping."
           else
-            if [ "${{ github.event_name }}" = "schedule" ]; then
-              if ! is_after_target; then
-                run_job=false
-                echo "Before 19:05 -> skipping."
-              fi
+            FORCE_RUN="${{ inputs.force_run }}"
+
+            # Only wait when:
+            # - it's a scheduled event, OR
+            # - it's a manual dispatch with force_run != true
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$FORCE_RUN" = "true" ]; then
+              echo "Manual run with force_run=true -> skipping wait for $TARGET_HM."
             else
-              # Manual runs only proceed if force_run=true or we are after the target time
-              if [ "${{ inputs.force_run }}" = "false" ] && ! is_after_target; then
-                run_job=false
-                echo "Manual run with force_run=false and before 19:05 -> skipping."
-              fi
+              echo "Ensuring local time is >= $TARGET_HM before continuing..."
+              while true; do
+                NOW_S=$(TZ=$TZSTR date +%s)
+                TGT_S=$(TZ=$TZSTR date -d "today $TARGET_HM" +%s)
+                NOW_HM=$(TZ=$TZSTR date +'%H:%M')
+
+                if [ "$NOW_S" -ge "$TGT_S" ]; then
+                  echo "Reached target time: now $NOW_HM >= $TARGET_HM. Proceeding."
+                  break
+                fi
+
+                REM_SECS=$((TGT_S - NOW_S))
+                if [ "$REM_SECS" -lt 0 ]; then
+                  # Safety: in case of any weird clock math, don't loop forever
+                  echo "Current time $NOW_HM appears past target, but comparison failed. Proceeding anyway."
+                  break
+                fi
+
+                REM_MINS=$(( REM_SECS / 60 ))
+                echo "Now $NOW_HM < $TARGET_HM (~$REM_MINS min remaining). Sleeping 5 minutes..."
+                sleep 300
+              done
             fi
           fi
 
