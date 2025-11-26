@@ -147,7 +147,7 @@ jobs:
             edgd1er/nordlynx-proxy:latest-ubuntu
 
           echo "Waiting for SOCKS proxy to be ready on 127.0.0.1:1080 ..."
-          for i in {1..40}; do
+          for i in {1..120}; do
             # Use socks5h so DNS resolves via proxy; add retries
             OUT=$(curl -sS --retry 3 --retry-connrefused --retry-delay 1 --max-time 5 \
                   -x socks5h://127.0.0.1:1080 https://ipinfo.io/ip || true)
