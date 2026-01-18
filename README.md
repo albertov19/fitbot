@@ -1,5 +1,5 @@
 # FitBot
-
+ 
 Python script to automate your session bookings in [aimharder.com](http://aimharder.com) platform
 
 ## Usage
