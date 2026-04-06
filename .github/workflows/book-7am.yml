@@ -139,26 +139,32 @@ jobs:
           # Consider pinning a tag you trust instead of latest-ubuntu
           docker run -d --name nordlynx-proxy \
             --cap-add=NET_ADMIN --device /dev/net/tun \
-            -e NORDVPN_LOGIN="${NORDVPN_TOKEN}" \
-            -e NORDVPN_PASS="" \
+            --sysctl net.ipv4.conf.all.src_valid_mark=1 \
+            -e NORDVPN_TOKEN="${NORDVPN_TOKEN}" \
             -e COUNTRY="${NORDVPN_COUNTRY}" \
             -e TECHNOLOGY=NordLynx \
             -p 1080:1080 -p 8888:8888 \
             edgd1er/nordlynx-proxy:latest-ubuntu
 
           echo "Waiting for SOCKS proxy to be ready on 127.0.0.1:1080 ..."
-          for i in {1..120}; do
+          for i in {1..60}; do
             # Use socks5h so DNS resolves via proxy; add retries
             OUT=$(curl -sS --retry 3 --retry-connrefused --retry-delay 1 --max-time 5 \
-                  -x socks5h://127.0.0.1:1080 https://ipinfo.io/ip || true)
+                  -x socks5h://127.0.0.1:1080 https://ipinfo.io/ip 2>/dev/null || true)
             if [[ "$OUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "✅ SOCKS proxy up: $OUT"
               READY=1; break
             fi
-            echo "Attempt $i/40..."; sleep 2
+            # Print container logs early so we can diagnose VPN issues
+            if [ "$i" = "10" ]; then
+              echo "--- Early diagnostics (attempt 10) ---"
+              docker logs nordlynx-proxy 2>&1 | tail -30 || true
+              echo "--- end diagnostics ---"
+            fi
+            echo "Attempt $i/60..."; sleep 2
           done
           if [ -z "$READY" ]; then
-            echo "❌ Proxy not ready. Diagnostics:"
+            echo "❌ Proxy not ready after 60 attempts. Diagnostics:"
             docker ps || true
             docker logs nordlynx-proxy || true
             exit 1
