@@ -11,9 +11,9 @@ on:
   schedule:
     # GitHub Actions cron is UTC.
     # For Europe/Madrid WINTER time (UTC+1): 17:30 UTC = 18:30 local
-    - cron: "30 17 * * 6,0-3"
+    # - cron: "30 17 * * 6,0-3"
     # For SUMMER time (UTC+2), switch manually to:
-    # - cron: "30 16 * * 6,0-3"  # 16:30 UTC = 18:30 local
+    - cron: "30 16 * * 6,0-3"  # 16:30 UTC = 18:30 local
 
 jobs:
   gate:
