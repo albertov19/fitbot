@@ -1,4 +1,5 @@
-LOGIN_ENDPOINT = "https://aimharder.com/login"
+LOGIN_PAGE = "https://login.aimharder.com/"
+LOGIN_ENDPOINT = "https://login.aimharder.com/api/login"
 
 ERROR_TAG_ID = "loginErrors"
 

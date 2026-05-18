@@ -1,20 +1,18 @@
+import hashlib
 from datetime import datetime
 from http import HTTPStatus
 from typing import Optional
 
-from bs4 import BeautifulSoup
 from requests import Session
 
 from constants import (
     LOGIN_ENDPOINT,
+    LOGIN_PAGE,
     book_endpoint,
     classes_endpoint,
-    ERROR_TAG_ID,
 )
 from exceptions import (
     BookingFailed,
-    IncorrectCredentials,
-    TooManyWrongAttempts,
     MESSAGE_BOOKING_FAILED_UNKNOWN,
     MESSAGE_BOOKING_FAILED_NO_CREDIT,
     MESSAGE_SESSION_REJECTED,
@@ -27,6 +25,10 @@ BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
 )
+
+
+def _stable_fingerprint(email: str) -> str:
+    return hashlib.sha256(email.encode("utf-8")).hexdigest()[:50]
 
 
 class AimHarderClient:
@@ -61,19 +63,34 @@ class AimHarderClient:
         session.headers.update(
             {
                 "User-Agent": BROWSER_USER_AGENT,
-                "Accept-Language": "en-US,en;q=0.7",
+                "Accept-Language": "en-US,en;q=0.9",
                 "sec-ch-ua": '"Chromium";v="147", "Not.A/Brand";v="8"',
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"macOS"',
             }
         )
         logger.info(f"Using proxy: {'yes' if proxy else 'no'}")
+
+        # Seed the session cookies (PHPSESSID, AWSALB, etc.) by visiting the
+        # login page first - the API rejects requests that arrive without them.
+        session.get(LOGIN_PAGE)
+
         response = session.post(
             LOGIN_ENDPOINT,
-            data={
-                "login": "Log in",
-                "mail": email,
-                "pw": password,
+            json={
+                "username": email,
+                "password": password,
+                "fingerprint": _stable_fingerprint(email),
+            },
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Origin": "https://login.aimharder.com",
+                "Referer": "https://login.aimharder.com/",
+                "X-Requested-With": "XMLHttpRequest",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Dest": "empty",
             },
         )
         cookie_summary = sorted(
@@ -83,14 +100,11 @@ class AimHarderClient:
             f"Login response: status={response.status_code} length={len(response.content)} cookies={cookie_summary}"
         )
         response.raise_for_status()
-        soup = BeautifulSoup(response.content, "html.parser").find(id=ERROR_TAG_ID)
-        if soup is not None:
-            if TooManyWrongAttempts.key_phrase in soup.text:
-                raise TooManyWrongAttempts
-            elif IncorrectCredentials.key_phrase in soup.text:
-                raise IncorrectCredentials
-            else:
-                raise BookingFailed(f"Login error tag present: {soup.text[:200]!r}")
+        # amhrdrauth is the auth cookie - if it's missing, login didn't take.
+        if not any(c.name == "amhrdrauth" for c in session.cookies):
+            raise BookingFailed(
+                f"Login did not set amhrdrauth cookie (body[:200]={response.text[:200]!r})"
+            )
         logger.info("Logged successfully")
         return session
 
