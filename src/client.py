@@ -41,6 +41,17 @@ class AimHarderClient:
         self.session = self._login(email, password, proxy)
         self.box_id = box_id
         self.box_name = box_name
+        self._warmup_subdomain()
+
+    def _warmup_subdomain(self) -> None:
+        url = f"https://{self.box_name}.aimharder.com/schedule"
+        response = self.session.get(url)
+        cookie_summary = sorted(
+            f"{c.name}@{c.domain}" for c in self.session.cookies
+        )
+        logger.info(
+            f"Warmup response: status={response.status_code} length={len(response.content)} cookies={cookie_summary}"
+        )
 
     @staticmethod
     def _login(email: str, password: str, proxy: Optional[str] = None) -> Session:
@@ -65,8 +76,11 @@ class AimHarderClient:
                 "pw": password,
             },
         )
+        cookie_summary = sorted(
+            f"{c.name}@{c.domain}" for c in session.cookies
+        )
         logger.info(
-            f"Login response: status={response.status_code} length={len(response.content)}"
+            f"Login response: status={response.status_code} length={len(response.content)} cookies={cookie_summary}"
         )
         response.raise_for_status()
         soup = BeautifulSoup(response.content, "html.parser").find(id=ERROR_TAG_ID)
