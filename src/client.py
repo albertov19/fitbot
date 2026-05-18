@@ -51,6 +51,9 @@ class AimHarderClient:
                 "pw": password,
             },
         )
+        logger.info(
+            f"Login response: status={response.status_code} length={len(response.content)}"
+        )
         response.raise_for_status()
         soup = BeautifulSoup(response.content, "html.parser").find(id=ERROR_TAG_ID)
         if soup is not None:
@@ -69,6 +72,9 @@ class AimHarderClient:
                 "day": target_day.strftime("%Y%m%d"),
                 "familyId": family_id,
             },
+        )
+        logger.info(
+            f"Classes response: status={response.status_code} body[:500]={response.text[:500]!r}"
         )
         return response.json().get("bookings")
 
