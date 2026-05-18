@@ -3,7 +3,7 @@ from http import HTTPStatus
 from typing import Optional
 
 from bs4 import BeautifulSoup
-from requests import Session
+from curl_cffi.requests import Session
 
 from constants import (
     LOGIN_ENDPOINT,
@@ -38,17 +38,10 @@ class AimHarderClient:
 
     @staticmethod
     def _login(email: str, password: str, proxy: Optional[str] = None) -> Session:
-        session = Session()
-        session.proxies = {"https": proxy}
-        session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-            }
-        )
+        session = Session(impersonate="chrome120")
+        if proxy:
+            session.proxies = {"http": proxy, "https": proxy}
+        session.headers.update({"Accept-Language": "es-ES,es;q=0.9,en;q=0.8"})
         logger.info(f"Using proxy: {'yes' if proxy else 'no'}")
         response = session.post(
             LOGIN_ENDPOINT,
