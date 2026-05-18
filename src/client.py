@@ -3,7 +3,8 @@ from http import HTTPStatus
 from typing import Optional
 
 from bs4 import BeautifulSoup
-from curl_cffi.requests import Session
+from curl_cffi import requests as cffi_requests
+from requests import Session
 
 from constants import (
     LOGIN_ENDPOINT,
@@ -35,13 +36,22 @@ class AimHarderClient:
         self.session = self._login(email, password, proxy)
         self.box_id = box_id
         self.box_name = box_name
+        self.proxy = proxy
 
     @staticmethod
     def _login(email: str, password: str, proxy: Optional[str] = None) -> Session:
-        session = Session(impersonate="chrome120")
+        session = Session()
         if proxy:
             session.proxies = {"http": proxy, "https": proxy}
-        session.headers.update({"Accept-Language": "es-ES,es;q=0.9,en;q=0.8"})
+        session.headers.update(
+            {
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+            }
+        )
         logger.info(f"Using proxy: {'yes' if proxy else 'no'}")
         response = session.post(
             LOGIN_ENDPOINT,
@@ -61,6 +71,8 @@ class AimHarderClient:
                 raise TooManyWrongAttempts
             elif IncorrectCredentials.key_phrase in soup.text:
                 raise IncorrectCredentials
+            else:
+                raise BookingFailed(f"Login error tag present: {soup.text[:200]!r}")
         logger.info("Logged successfully")
         return session
 
@@ -74,15 +86,22 @@ class AimHarderClient:
             },
         )
         logger.info(
-            f"Classes response: status={response.status_code} body[:500]={response.text[:500]!r}"
+            f"Classes response: status={response.status_code} length={len(response.content)}"
         )
+        if not response.text.strip():
+            raise BookingFailed(
+                f"Classes endpoint returned empty body (status={response.status_code})"
+            )
         return response.json().get("bookings")
 
     def book_class(
         self, target_day: datetime, class_id: str, family_id: str | None = None
     ) -> bool:
         box_origin = f"https://{self.box_name}.aimharder.com"
-        response = self.session.post(
+        proxies = (
+            {"http": self.proxy, "https": self.proxy} if self.proxy else None
+        )
+        response = cffi_requests.post(
             book_endpoint(self.box_name),
             data={
                 "id": class_id,
@@ -94,12 +113,20 @@ class AimHarderClient:
                 "Origin": box_origin,
                 "Referer": f"{box_origin}/schedule",
                 "X-Requested-With": "XMLHttpRequest",
+                "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
             },
+            cookies=self.session.cookies.get_dict(),
+            impersonate="chrome120",
+            proxies=proxies,
         )
         logger.info(
-            f"Book response: status={response.status_code} body={response.text}"
+            f"Book response: status={response.status_code} length={len(response.content)} body[:200]={response.text[:200]!r}"
         )
         if response.status_code == HTTPStatus.OK:
+            if not response.text.strip():
+                raise BookingFailed(
+                    f"{MESSAGE_BOOKING_FAILED_UNKNOWN} (empty body, status=200)"
+                )
             data = response.json()
             book_state = data.get("bookState")
             if book_state == -2:
@@ -108,10 +135,10 @@ class AimHarderClient:
                 raise BookingFailed(MESSAGE_TOO_SOON_TO_BOOK)
             if isinstance(book_state, int) and book_state < 0:
                 raise BookingFailed(
-                    f"{MESSAGE_BOOKING_FAILED_UNKNOWN} (bookState={book_state}, body={data})"
+                    f"{MESSAGE_BOOKING_FAILED_UNKNOWN} (bookState={book_state})"
                 )
             if data.get("logout"):
-                raise BookingFailed(f"{MESSAGE_SESSION_REJECTED} (body={data})")
+                raise BookingFailed(MESSAGE_SESSION_REJECTED)
             if "errorMssg" in data or "errorMssgLang" in data:
                 raise BookingFailed(
                     f"{MESSAGE_BOOKING_FAILED_UNKNOWN} ({data.get('errorMssg') or data.get('errorMssgLang')})"
@@ -119,7 +146,7 @@ class AimHarderClient:
             if book_state == 1 or "id" in data:
                 return True
             raise BookingFailed(
-                f"{MESSAGE_BOOKING_FAILED_UNKNOWN} (unexpected response, body={data})"
+                f"{MESSAGE_BOOKING_FAILED_UNKNOWN} (unexpected response, keys={sorted(data.keys())})"
             )
         raise BookingFailed(
             f"{MESSAGE_BOOKING_FAILED_UNKNOWN} (HTTP {response.status_code})"
