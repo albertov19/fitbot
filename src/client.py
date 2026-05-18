@@ -81,13 +81,25 @@ class AimHarderClient:
                 "familyId": family_id,
             },
         )
+        logger.info(
+            f"Book response: status={response.status_code} body={response.text}"
+        )
         if response.status_code == HTTPStatus.OK:
-            response = response.json()
-            if "bookState" in response and response["bookState"] == -2:
+            data = response.json()
+            book_state = data.get("bookState")
+            if book_state == -2:
                 raise BookingFailed(MESSAGE_BOOKING_FAILED_NO_CREDIT)
-            if "bookState" in response and response["bookState"] == -12:
+            if book_state == -12:
                 raise BookingFailed(MESSAGE_TOO_SOON_TO_BOOK)
-            if "errorMssg" not in response and "errorMssgLang" not in response:
-                # booking went fine
-                return
-        raise BookingFailed(MESSAGE_BOOKING_FAILED_UNKNOWN)
+            if isinstance(book_state, int) and book_state < 0:
+                raise BookingFailed(
+                    f"{MESSAGE_BOOKING_FAILED_UNKNOWN} (bookState={book_state}, body={data})"
+                )
+            if "errorMssg" in data or "errorMssgLang" in data:
+                raise BookingFailed(
+                    f"{MESSAGE_BOOKING_FAILED_UNKNOWN} ({data.get('errorMssg') or data.get('errorMssgLang')})"
+                )
+            return True
+        raise BookingFailed(
+            f"{MESSAGE_BOOKING_FAILED_UNKNOWN} (HTTP {response.status_code})"
+        )
