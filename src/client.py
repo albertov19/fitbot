@@ -17,6 +17,7 @@ from exceptions import (
     TooManyWrongAttempts,
     MESSAGE_BOOKING_FAILED_UNKNOWN,
     MESSAGE_BOOKING_FAILED_NO_CREDIT,
+    MESSAGE_SESSION_REJECTED,
     MESSAGE_TOO_SOON_TO_BOOK,
 )
 from logger import logger
@@ -39,6 +40,15 @@ class AimHarderClient:
     def _login(email: str, password: str, proxy: Optional[str] = None) -> Session:
         session = Session()
         session.proxies = {"https": proxy}
+        session.headers.update(
+            {
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+            }
+        )
         logger.info(f"Using proxy: {'yes' if proxy else 'no'}")
         response = session.post(
             LOGIN_ENDPOINT,
@@ -72,6 +82,7 @@ class AimHarderClient:
     def book_class(
         self, target_day: datetime, class_id: str, family_id: str | None = None
     ) -> bool:
+        box_origin = f"https://{self.box_name}.aimharder.com"
         response = self.session.post(
             book_endpoint(self.box_name),
             data={
@@ -79,6 +90,11 @@ class AimHarderClient:
                 "day": target_day.strftime("%Y%m%d"),
                 "insist": 0,
                 "familyId": family_id,
+            },
+            headers={
+                "Origin": box_origin,
+                "Referer": f"{box_origin}/schedule",
+                "X-Requested-With": "XMLHttpRequest",
             },
         )
         logger.info(
@@ -95,11 +111,17 @@ class AimHarderClient:
                 raise BookingFailed(
                     f"{MESSAGE_BOOKING_FAILED_UNKNOWN} (bookState={book_state}, body={data})"
                 )
+            if data.get("logout"):
+                raise BookingFailed(f"{MESSAGE_SESSION_REJECTED} (body={data})")
             if "errorMssg" in data or "errorMssgLang" in data:
                 raise BookingFailed(
                     f"{MESSAGE_BOOKING_FAILED_UNKNOWN} ({data.get('errorMssg') or data.get('errorMssgLang')})"
                 )
-            return True
+            if book_state == 1 or "id" in data:
+                return True
+            raise BookingFailed(
+                f"{MESSAGE_BOOKING_FAILED_UNKNOWN} (unexpected response, body={data})"
+            )
         raise BookingFailed(
             f"{MESSAGE_BOOKING_FAILED_UNKNOWN} (HTTP {response.status_code})"
         )
