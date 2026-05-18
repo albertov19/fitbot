@@ -3,7 +3,6 @@ from http import HTTPStatus
 from typing import Optional
 
 from bs4 import BeautifulSoup
-from curl_cffi import requests as cffi_requests
 from requests import Session
 
 from constants import (
@@ -24,6 +23,12 @@ from exceptions import (
 from logger import logger
 
 
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+)
+
+
 class AimHarderClient:
     def __init__(
         self,
@@ -36,7 +41,6 @@ class AimHarderClient:
         self.session = self._login(email, password, proxy)
         self.box_id = box_id
         self.box_name = box_name
-        self.proxy = proxy
 
     @staticmethod
     def _login(email: str, password: str, proxy: Optional[str] = None) -> Session:
@@ -45,11 +49,11 @@ class AimHarderClient:
             session.proxies = {"http": proxy, "https": proxy}
         session.headers.update(
             {
-                "User-Agent": (
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+                "User-Agent": BROWSER_USER_AGENT,
+                "Accept-Language": "en-US,en;q=0.7",
+                "sec-ch-ua": '"Chromium";v="147", "Not.A/Brand";v="8"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"macOS"',
             }
         )
         logger.info(f"Using proxy: {'yes' if proxy else 'no'}")
@@ -88,6 +92,7 @@ class AimHarderClient:
         logger.info(
             f"Classes response: status={response.status_code} length={len(response.content)}"
         )
+        response.raise_for_status()
         if not response.text.strip():
             raise BookingFailed(
                 f"Classes endpoint returned empty body (status={response.status_code})"
@@ -98,26 +103,24 @@ class AimHarderClient:
         self, target_day: datetime, class_id: str, family_id: str | None = None
     ) -> bool:
         box_origin = f"https://{self.box_name}.aimharder.com"
-        proxies = (
-            {"http": self.proxy, "https": self.proxy} if self.proxy else None
-        )
-        response = cffi_requests.post(
+        response = self.session.post(
             book_endpoint(self.box_name),
             data={
                 "id": class_id,
                 "day": target_day.strftime("%Y%m%d"),
                 "insist": 0,
-                "familyId": family_id,
+                "familyId": family_id if family_id is not None else "",
             },
             headers={
+                "Accept": "*/*",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
                 "Origin": box_origin,
                 "Referer": f"{box_origin}/schedule",
                 "X-Requested-With": "XMLHttpRequest",
-                "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Dest": "empty",
             },
-            cookies=self.session.cookies.get_dict(),
-            impersonate="chrome120",
-            proxies=proxies,
         )
         logger.info(
             f"Book response: status={response.status_code} length={len(response.content)} body[:200]={response.text[:200]!r}"
