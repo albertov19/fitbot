@@ -9,7 +9,7 @@ on:
         default: false
 
   schedule:
-    # GitHub Actions cron is UTC.
+    # GitHub Actions cron is UTC. Days: 6=Sat, 0=Sun, 1=Mon, 2=Tue, 3=Wed.
     # For Europe/Madrid WINTER time (UTC+1): 17:30 UTC = 18:30 local
     # - cron: "30 17 * * 6,0-3"
     # For SUMMER time (UTC+2), switch manually to:
