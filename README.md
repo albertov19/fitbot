@@ -55,14 +55,18 @@ In your repo: **Settings → Secrets and variables → Actions → New repositor
 | Secret | What goes in it |
 |---|---|
 | `EMAIL` | Your aimharder.com login email |
-| `PASSWORD` | Your aimharder.com password |
+| `PWD` | Your aimharder.com password |
 | `BOX_NAME` | Your gym's subdomain — the part before `.aimharder.com` in your schedule URL |
 | `BOX_ID` | Your gym's numeric box ID (see *Finding your box ID* below) |
-| `NORD_TOKEN` | NordVPN access token from [my.nordaccount.com/dashboard/nordvpn/access-tokens](https://my.nordaccount.com/dashboard/nordvpn/access-tokens) |
+| `NORD_TOKEN` | NordVPN access token from [my.nordaccount.com/dashboard/nordvpn/access-tokens](https://my.nordaccount.com/dashboard/nordvpn/access-tokens/) |
 | `NORD_COUNTRY` | `ES` for Spain (or any other two-letter code NordVPN supports) |
 | `FAMILY_ID` | *Optional.* Member ID if your account books for multiple people |
 
-> SCREENSHOT NEEDED: `docs/secrets.png` — the GitHub Secrets list with all the names visible and values masked. See *Screenshots to capture* at the bottom of this README.
+![Repository secrets](docs/secrets.png)
+
+The NordVPN token is generated from the access-tokens page in your Nord account:
+
+![NordVPN access token generation](docs/nordvpn-token.png)
 
 ### 2. Finding your box ID
 
@@ -71,7 +75,7 @@ In your repo: **Settings → Secrets and variables → Actions → New repositor
 3. Navigate to your schedule. You'll see a request like `GET /api/bookings?day=...&box=XXXX`. The number after `box=` is your `BOX_ID`.
 4. The subdomain right before `.aimharder.com` in that URL is your `BOX_NAME`.
 
-> SCREENSHOT NEEDED: `docs/box-id.png` — DevTools Network tab with the `/api/bookings` request highlighted and the `box=` query parameter circled.
+![Finding box ID in DevTools](docs/box-id.png)
 
 ### 3. Edit `booking_goals` for your gym
 
@@ -116,9 +120,9 @@ The workflow has a small bash step that flips Tuesday's or Wednesday's `name` to
 
 ## Manual trigger
 
-Actions tab → **Book 7AM Classes (Sat–Wed)** → **Run workflow** → leave `force_run` unchecked for a normal run, or check it to bypass the 19:05-Madrid gate (useful for credential testing).
+Actions tab → **Book 7AM Classes (Sat–Wed)** → **Run workflow** → leave `force_run` unchecked for a normal run, or check it to bypass the 19:05-Madrid gate (useful for credential testing). Successful runs show up as green checkmarks in the workflow list — those green rows are your "it actually booked" indicator.
 
-> SCREENSHOT NEEDED: `docs/manual-trigger.png` — the workflow dispatch panel with `force_run` checkbox visible.
+![Manual workflow trigger with previous green runs](docs/manual-trigger.png)
 
 ---
 
@@ -136,8 +140,6 @@ The script logs the key fields in plain language. Look for these lines in the Ac
 | `No credit available` (bookState=-2) | Pay your gym. |
 | `Session rejected by server (logout)` | The booking POST was rejected as unauthenticated. Almost always means login regressed — re-capture the browser cURL and diff. |
 | `Class already booked. Nothing to do` | Another run already grabbed the spot, or you booked manually. |
-
-> SCREENSHOT NEEDED: `docs/successful-run.png` — Actions tab showing a green run, expanded to the "Run booking script" step with `Class booked successfully` visible.
 
 ### Daylight saving
 
@@ -175,24 +177,6 @@ You'll need a Spain-based SOCKS5 proxy locally for the request to not get geo-bl
 - All credentials live in GitHub Actions secrets, never in code.
 - The `fingerprint` sent on login is a stable SHA-256 of your email's first 50 hex chars — same value every run so AimHarder doesn't see us as a "new device" each time. If they ever require device verification, you'll need to log in once via a browser to authorise the fingerprint.
 - The Actions log shows cookie *names* but never values. Body excerpts on the booking response are capped at 200 chars and stripped of full PII; tighten these further if you make the repo public.
-
----
-
-## Screenshots to capture
-
-When you have a chance, capture these and drop them in a `docs/` folder so the README references resolve. None of this is blocking — the README is functional without them — but a couple of pictures make the setup much easier for future-you.
-
-| File | Where to capture | What to show |
-|---|---|---|
-| `docs/box-id.png` | Browser DevTools → Network tab on your aimharder schedule page | The `GET /api/bookings?…&box=NNNN` request URL with `box=` highlighted |
-| `docs/secrets.png` | GitHub: repo → Settings → Secrets and variables → Actions | The list of secrets (`EMAIL`, `PASSWORD`, `BOX_NAME`, `BOX_ID`, `NORD_TOKEN`, `NORD_COUNTRY`) — values stay masked automatically |
-| `docs/manual-trigger.png` | GitHub: Actions tab → "Book 7AM Classes" → Run workflow dropdown | The dispatch panel with the `force_run` checkbox visible |
-| `docs/successful-run.png` | GitHub: Actions → a green run → "Run booking script" step expanded | The log showing `Class booked successfully` (you can redact your email/box name) |
-| `docs/nordvpn-token.png` *(optional)* | NordVPN → my.nordaccount.com → Access tokens | The token generation page (don't actually show a real token) |
-
-After capturing them, replace the `> SCREENSHOT NEEDED:` blockquotes above with normal Markdown image syntax: `![alt](docs/box-id.png)`.
-
-The repo also has an old `inspect.png` left over from the original fitbot README — safe to delete.
 
 ---
 
